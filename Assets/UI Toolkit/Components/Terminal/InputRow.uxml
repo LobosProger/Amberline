@@ -1,0 +1,10 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" editor-extension-mode="False">
+    <ui:VisualElement class="input-row">
+        <ui:Label text="&gt;" class="input-row__prompt"/>
+        <ui:VisualElement class="input-row__field-wrapper">
+            <ui:TextField class="input-row__field" placeholder-text="ask anything, or type /help"/>
+            <ui:Label name="input-row__overlay" class="input-row__overlay" picking-mode="Ignore"/>
+        </ui:VisualElement>
+        <ui:Label name="input-row__hint" text="[TAB] COMPLETE  [UP] HISTORY" class="input-row__hint input-row__hint--hidden" picking-mode="Ignore"/>
+    </ui:VisualElement>
+</ui:UXML>

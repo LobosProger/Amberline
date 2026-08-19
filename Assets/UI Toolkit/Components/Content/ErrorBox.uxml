@@ -1,0 +1,5 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" editor-extension-mode="False">
+    <ui:VisualElement class="line--error">
+        <ui:Label name="text" text="error text" class="line--error-text"/>
+    </ui:VisualElement>
+</ui:UXML>

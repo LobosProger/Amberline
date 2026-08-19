@@ -1,0 +1,11 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" editor-extension-mode="False">
+    <ui:VisualElement class="top-bar">
+        <ui:VisualElement class="top-bar__lights">
+            <ui:VisualElement class="top-bar__light top-bar__light--fill"/>
+            <ui:VisualElement class="top-bar__light top-bar__light--fill"/>
+            <ui:VisualElement class="top-bar__light top-bar__light--fill"/>
+        </ui:VisualElement>
+        <ui:Label text="A M B E R L I N E" class="top-bar__title"/>
+        <ui:Label name="top-bar__workspace" text="[NO WORKSPACE]" class="top-bar__workspace"/>
+    </ui:VisualElement>
+</ui:UXML>

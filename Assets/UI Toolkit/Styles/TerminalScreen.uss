@@ -1,0 +1,200 @@
+/* Terminal screen widgets — top bar, input row, status bar */
+
+/* Pins the fixed chrome (TopBar / InputRow) so only the ScrollView absorbs flex
+   shrink. The <ui:Instance> wrappers are TemplateContainers that default to
+   flex-shrink:1 — without this, an overflowing ScrollView steals their height and
+   the input row gets squeezed past the bottom edge. The flex-shrink:0 on the inner
+   .top-bar / .input-row is not enough; it must sit on the wrapper too. */
+.terminal-chrome {
+    flex-shrink: 0;
+}
+
+.top-bar {
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: center;
+    flex-shrink: 0;
+    padding: 20px 20px;
+    border-bottom-width: 1px;
+    border-bottom-color: var(--accent-amber);
+}
+
+.top-bar__lights {
+    flex-direction: row;
+    align-items: center;
+}
+
+.top-bar__light {
+    width: 10px;
+    height: 10px;
+    border-width: 1.5px;
+    border-color: var(--accent-amber);
+    margin-right: 8px;
+}
+
+.top-bar__light--fill {
+    background-color: var(--accent-amber);
+}
+
+.top-bar__title {
+    font-size: 26px;
+    color: var(--accent-amber);
+    -unity-font-style: bold;
+    letter-spacing: 8px;
+    -unity-text-align: middle-center;
+    text-shadow: 0 0 12px var(--amber-overlay-55);
+}
+
+.top-bar__workspace {
+    font-size: 26px;
+    color: var(--accent-amber);
+    -unity-font-style: bold;
+    -unity-text-align: middle-right;
+    text-shadow: 0 0 12px var(--amber-overlay-55);
+}
+
+/* Input row — bordered, faint amber backdrop */
+
+.input-row {
+    flex-direction: row;
+    align-items: center;
+    flex-shrink: 0;
+    padding: 12px 16px;
+    margin: 0 20px 20px 20px;
+    border-width: 1px;
+    border-color: var(--accent-amber);
+    background-color: var(--amber-overlay-04);
+    min-height: 64px;
+}
+
+.input-row__prompt {
+    font-size: 26px;
+    color: var(--accent-amber);
+    -unity-font-style: bold;
+    -unity-text-align: middle-left;
+    margin-right: 16px;
+    padding-right: 0;
+    height: 38px;
+    opacity: 0.85;
+    text-shadow: 0 0 12px var(--amber-overlay-55);
+}
+
+.input-row__slash-hint {
+    font-size: 26px;
+    color: var(--accent-amber);
+    margin-right: 8px;
+    margin-left: 0;
+    padding-left: 0;
+}
+
+.input-row__field-wrapper {
+    flex-grow: 1;
+    position: relative;
+    height: 43px;
+}
+
+.input-row__field {
+    flex-grow: 1;
+    width: 100%;
+    height: 43px;
+    font-size: 26px;
+    color: var(--accent-amber);
+    background-color: rgba(0, 0, 0, 0);
+    border-width: 0;
+    -unity-font-style: bold;
+    -unity-text-align: middle-left;
+    margin-top: 0;
+    margin-right: 0;
+    margin-bottom: 0;
+    margin-left: 0;
+    text-shadow: 0 0 12px var(--amber-overlay-55);
+}
+
+.input-row__field .unity-text-field__input {
+    background-color: rgba(0, 0, 0, 0);
+    border-width: 0;
+    color: var(--accent-amber);
+    font-size: 26px;
+    padding: 0;
+    margin: 0;
+    --unity-cursor-color: rgba(0, 0, 0, 0);
+    /* Unity's default selection blue is the one non-amber colour that can appear on this
+       screen, so it is overridden here rather than left to the runtime theme. */
+    --unity-selection-color: var(--amber-overlay-28);
+}
+
+/* While a turn is running the field is read-only rather than disabled, so it keeps focus and
+   Escape still reaches the cancel handler. This just dims it so the state is visible. */
+
+.input-row__field--locked {
+    opacity: 0.4;
+}
+
+.input-row__field .unity-base-text-field__input--placeholder {
+    color: var(--amber-overlay-35);
+}
+
+.input-row__field:focus .unity-base-text-field__input--placeholder {
+    color: rgba(230, 170, 70, 0);
+}
+
+.input-row__overlay {
+    position: absolute;
+    left: 0;
+    top: 0;
+    right: 0;
+    height: 43px;
+    font-size: 26px;
+    color: var(--accent-amber);
+    -unity-font-style: bold;
+    -unity-text-align: middle-left;
+    margin: 0;
+    padding: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    opacity: 0.28;
+    text-shadow: 0 0 12px var(--amber-overlay-55);
+}
+
+.input-row__hint {
+    font-size: 18px;
+    color: var(--accent-amber);
+    -unity-font-style: bold;
+    -unity-text-align: middle-right;
+    margin-left: 16px;
+    flex-shrink: 0;
+    opacity: 0.55;
+    transition: opacity 0.15s ease-in-out;
+    text-shadow: 0 0 12px var(--amber-overlay-55);
+}
+
+.input-row__hint--hidden {
+    opacity: 0;
+}
+
+.status-bar {
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: center;
+    flex-shrink: 0;
+    padding: 14px 20px;
+    background-color: var(--bg-deep);
+    border-top-width: 1px;
+    border-top-color: var(--accent-amber);
+}
+
+.status-bar__version {
+    font-size: 18px;
+    color: var(--accent-amber);
+    -unity-text-align: middle-right;
+    -unity-font-style: bold;
+    opacity: 0.55;
+}
+
+.status-bar__user-info {
+    font-size: 18px;
+    color: var(--accent-amber);
+    -unity-text-align: middle-left;
+    -unity-font-style: bold;
+    opacity: 0.55;
+}

@@ -1,0 +1,21 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" editor-extension-mode="False">
+    <ui:Template name="InputRow" src="project://database/Assets/UI%20Toolkit/Components/Terminal/InputRow.uxml?fileID=9197481963319205126&amp;guid=7298a9c7f1825e4478f9a8c4e7730b3e&amp;type=3#InputRow"/>
+    <ui:Template name="TopBar" src="project://database/Assets/UI%20Toolkit/Components/Terminal/TopBar.uxml?fileID=9197481963319205126&amp;guid=5e49a41f2fce45d4ea2e0a402492b7ec&amp;type=3#TopBar"/>
+    <Style src="project://database/Assets/UI%20Toolkit/Styles/TerminalCommon.uss?fileID=7433441132597879392&amp;guid=3a624e15f52aba14a86187ae11188ae5&amp;type=3#TerminalCommon"/>
+    <Style src="project://database/Assets/UI%20Toolkit/Styles/TerminalLines.uss?fileID=7433441132597879392&amp;guid=c664f9e90c11b6d4381c59efdc844dd8&amp;type=3#TerminalLines"/>
+    <Style src="project://database/Assets/UI%20Toolkit/Styles/TerminalScreen.uss?fileID=7433441132597879392&amp;guid=cb1dcf2bc8f1684499296d3ccc8ec567&amp;type=3#TerminalScreen"/>
+    <Style src="project://database/Assets/UI%20Toolkit/Styles/TerminalApproval.uss?fileID=7433441132597879392&amp;guid=9353595ae853de045b1ba8ea92ebc956&amp;type=3#TerminalApproval"/>
+    <Style src="project://database/Assets/UI%20Toolkit/Styles/TerminalDiff.uss?fileID=7433441132597879392&amp;guid=248c5cc58b639074192110ce3a8adee3&amp;type=3#TerminalDiff"/>
+    <ui:VisualElement class="terminal-root">
+        <ui:Instance template="TopBar" class="terminal-chrome"/>
+        <ui:ScrollView class="terminal-scroll">
+            <ui:VisualElement name="terminal-content" class="terminal-content"/>
+        </ui:ScrollView>
+        <ui:Instance template="InputRow" class="terminal-chrome"/>
+        <ui:VisualElement class="status-bar terminal-chrome">
+            <ui:Label name="status-bar__workspace" text="workspace: none" class="status-bar__user-info"/>
+            <ui:VisualElement style="flex-grow: 1;"/>
+            <ui:Label name="status-bar__state" text="idle" class="status-bar__version"/>
+        </ui:VisualElement>
+    </ui:VisualElement>
+</ui:UXML>

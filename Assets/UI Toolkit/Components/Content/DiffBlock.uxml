@@ -1,0 +1,6 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" editor-extension-mode="False">
+    <ui:VisualElement class="diff-block">
+        <ui:Label name="diff-block__header" text="src/Player.cs   +0 -0" class="diff-block__header"/>
+        <ui:VisualElement name="diff-block__rows" class="diff-block__rows"/>
+    </ui:VisualElement>
+</ui:UXML>

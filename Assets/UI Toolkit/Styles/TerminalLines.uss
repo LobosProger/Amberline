@@ -1,0 +1,114 @@
+/* Terminal line styles — amber palette, one shape per CLI semantic.
+   Phosphor halo (text-shadow) is set per text-label class because UI Toolkit
+   text-shadow does NOT inherit from parent VisualElements. */
+
+/* Boot / notice — a bare line of system text, no decoration */
+
+.line--boot {
+    font-size: 24px;
+    color: var(--accent-amber);
+    margin-bottom: 8px;
+    white-space: normal;
+    -unity-font-style: bold;
+    text-shadow: 0 0 12px var(--amber-overlay-55);
+}
+
+/* Banner — the start-up header block: full border on all sides */
+
+.line--banner {
+    border-width: 2px;
+    border-color: var(--accent-amber);
+    padding: 12px 16px;
+    margin-top: 20px;
+    margin-bottom: 20px;
+    width: auto;
+    max-width: 100%;
+    flex-shrink: 1;
+}
+
+.line--banner-text {
+    font-size: 26px;
+    color: var(--accent-amber);
+    white-space: normal;
+    -unity-font-style: bold;
+    text-shadow: 0 0 12px var(--amber-overlay-55);
+}
+
+/* User command — echo of the line the user submitted, prefixed with "> " */
+
+.line--command-echo {
+    font-size: 24px;
+    color: var(--accent-amber);
+    margin-top: 20px;
+    margin-bottom: 8px;
+    white-space: normal;
+    -unity-font-style: bold;
+    text-shadow: 0 0 12px var(--amber-overlay-55);
+}
+
+/* Agent message — the model's prose answer: left border + warm tint */
+
+.line--response {
+    background-color: var(--amber-overlay-06);
+    border-left-width: 3px;
+    border-left-color: var(--accent-amber);
+    padding: 8px 14px;
+    margin-bottom: 16px;
+    width: auto;
+    max-width: 100%;
+    flex-shrink: 1;
+}
+
+.line--response-text {
+    font-size: 24px;
+    color: var(--accent-amber);
+    white-space: normal;
+    -unity-font-style: bold;
+    text-shadow: 0 0 12px var(--amber-overlay-55);
+}
+
+/* Tool activity — a tool call and its short result: vertical left line, no fill.
+   Dimmer than an agent message so tool traffic reads as secondary. */
+
+.line--tool {
+    border-left-width: 3px;
+    border-left-color: var(--accent-amber-dim);
+    padding-top: 8px;
+    padding-bottom: 8px;
+    padding-left: 20px;
+    margin-top: 8px;
+    margin-bottom: 16px;
+    width: auto;
+    max-width: 100%;
+    flex-shrink: 1;
+}
+
+.line--tool-text {
+    font-size: 22px;
+    color: var(--accent-amber-dim);
+    white-space: normal;
+    -unity-font-style: bold;
+    text-shadow: 0 0 10px var(--amber-overlay-35);
+}
+
+/* Error — same shape as a tool card but in warning red, so failures are
+   impossible to miss against a screen that is otherwise entirely amber. */
+
+.line--error {
+    background-color: var(--red-overlay-08);
+    border-left-width: 3px;
+    border-left-color: var(--accent-red);
+    padding: 8px 14px;
+    margin-bottom: 16px;
+    width: auto;
+    max-width: 100%;
+    flex-shrink: 1;
+}
+
+.line--error-text {
+    font-size: 24px;
+    color: var(--accent-red);
+    white-space: normal;
+    -unity-font-style: bold;
+    text-shadow: 0 0 12px var(--red-overlay-45);
+}

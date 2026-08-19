@@ -1,0 +1,5 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" editor-extension-mode="False">
+    <ui:VisualElement class="line--tool">
+        <ui:Label name="text" text="tool activity" class="line--tool-text"/>
+    </ui:VisualElement>
+</ui:UXML>

@@ -1,0 +1,87 @@
+/* Base terminal styles: palette tokens, font, scroll.
+   The CRT effect (scanlines, vignette, chromatic aberration, bloom) is not here.
+   It is a URP FullScreenPassRendererFeature on the camera that draws the
+   RawImage showing this panel's render texture. See docs/implementation-plan.md 4.2. */
+
+:root {
+    --accent-amber: rgb(230, 170, 70);
+    --accent-amber-dim: rgb(176, 125, 44);
+    --bg-deep: rgb(10, 5, 0);
+    --bg-soft: rgb(31, 19, 4);
+    --amber-overlay-04: rgba(230, 170, 70, 0.04);
+    --amber-overlay-06: rgba(230, 170, 70, 0.06);
+    --amber-overlay-08: rgba(230, 170, 70, 0.08);
+    --amber-overlay-18: rgba(230, 170, 70, 0.18);
+    --amber-overlay-28: rgba(230, 170, 70, 0.28);
+    --amber-overlay-35: rgba(230, 170, 70, 0.35);
+    --amber-overlay-55: rgba(230, 170, 70, 0.55);
+    --accent-red: rgb(224, 96, 72);
+    --red-overlay-08: rgba(224, 96, 72, 0.08);
+    --red-overlay-45: rgba(224, 96, 72, 0.45);
+    --accent-green: rgb(110, 226, 120);
+    --green-overlay-08: rgba(110, 226, 120, 0.08);
+    --green-overlay-45: rgba(110, 226, 120, 0.45);
+}
+
+.terminal-root {
+    flex-grow: 1;
+    height: 100%;
+    overflow: hidden;
+    background-color: var(--bg-deep);
+    padding: 0;
+    margin: 0;
+    -unity-font-definition: url("project://database/Assets/Fonts/Sdf/JetBrainsMono-Bold%20SDF.asset");
+    -unity-font-style: bold;
+    color: var(--accent-amber);
+    /* text-shadow does NOT inherit in UI Toolkit — set per text-label class instead. */
+}
+
+.terminal-scroll {
+    flex-grow: 1;
+    flex-shrink: 1;
+    min-height: 0;
+    padding: 0;
+    width: 100%;
+}
+
+.terminal-scroll .unity-scroll-view__content-container {
+    padding: 24px 0 32px 32px;
+}
+
+.terminal-content {
+    flex-grow: 1;
+    flex-shrink: 1;
+    width: 100%;
+    margin-right: 48px;
+}
+
+/* Hide default scrollbar buttons, style dragger in amber */
+
+.terminal-scroll .unity-scroller--vertical {
+    margin: 0;
+    padding: 0;
+    width: 14px;
+}
+
+.terminal-scroll .unity-scroller--vertical .unity-base-slider__tracker {
+    background-color: var(--bg-deep);
+    border-width: 0;
+}
+
+.terminal-scroll .unity-scroller--vertical .unity-base-slider__dragger {
+    background-color: var(--accent-amber);
+    border-radius: 0;
+    border-width: 0;
+    margin: 0;
+}
+
+.terminal-scroll .unity-scroller--vertical .unity-repeat-button {
+    display: none;
+    height: 0;
+    min-height: 0;
+}
+
+.terminal-scroll .unity-scroller--vertical .unity-base-slider {
+    margin: 0;
+    padding: 0;
+}

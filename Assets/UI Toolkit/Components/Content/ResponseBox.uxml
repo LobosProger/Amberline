@@ -1,0 +1,5 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" editor-extension-mode="False">
+    <ui:VisualElement class="line--response">
+        <ui:Label name="text" text="response text" class="line--response-text"/>
+    </ui:VisualElement>
+</ui:UXML>

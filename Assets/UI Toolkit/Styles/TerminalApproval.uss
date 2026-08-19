@@ -1,0 +1,148 @@
+/* Approval card — the one element in the terminal that stops the agent and waits for a person.
+
+   Shape: a bright 2px box with a warm fill. A banner is also a 2px box, but a banner is printed
+   once at boot and never again, so the two can never be on screen at the same time and confused
+   with each other. Nothing else in the taxonomy is a full bright box, which is the point: this is
+   the only line the user has to answer.
+
+   A COMMAND CARD IS DELIBERATELY DIFFERENT. Red border, red fill, red title and an extra warning
+   line. A shell command reaches outside the sandbox entirely and is asked about in every
+   permission mode, so it must not be answerable by the muscle memory a file edit builds up.
+
+   Phosphor halo (text-shadow) is set per text-label class because UI Toolkit text-shadow does
+   NOT inherit from parent VisualElements. */
+
+.approval-card {
+    border-width: 2px;
+    border-color: var(--accent-amber);
+    background-color: var(--amber-overlay-08);
+    padding: 14px 16px;
+    margin-top: 16px;
+    margin-bottom: 16px;
+    width: auto;
+    max-width: 100%;
+    flex-shrink: 1;
+}
+
+.approval-card--command {
+    border-width: 3px;
+    border-color: var(--accent-red);
+    background-color: var(--red-overlay-08);
+}
+
+/* An answered card stays in the log as the record of what the agent was allowed to do, dimmed so
+   it reads as history rather than as another question. */
+
+.approval-card--resolved {
+    opacity: 0.45;
+}
+
+.approval-card__hidden {
+    display: none;
+}
+
+.approval-card__title {
+    font-size: 24px;
+    color: var(--accent-amber);
+    -unity-font-style: bold;
+    letter-spacing: 3px;
+    white-space: normal;
+    margin-bottom: 8px;
+    text-shadow: 0 0 12px var(--amber-overlay-55);
+}
+
+.approval-card--command .approval-card__title {
+    color: var(--accent-red);
+    text-shadow: 0 0 12px var(--red-overlay-45);
+}
+
+.approval-card__warning {
+    font-size: 22px;
+    color: var(--accent-red);
+    -unity-font-style: bold;
+    white-space: normal;
+    margin-bottom: 8px;
+    text-shadow: 0 0 10px var(--red-overlay-45);
+}
+
+.approval-card__target {
+    font-size: 24px;
+    color: var(--accent-amber);
+    -unity-font-style: bold;
+    white-space: normal;
+    margin-bottom: 10px;
+    text-shadow: 0 0 12px var(--amber-overlay-55);
+}
+
+.approval-card__body {
+    width: 100%;
+    margin-bottom: 12px;
+}
+
+/* The fallback when there is no diff to draw: the raw payload the model asked for. Dimmer than
+   the target, because it is evidence rather than the question. */
+
+.approval-card__preview {
+    font-size: 22px;
+    color: var(--accent-amber-dim);
+    -unity-font-style: bold;
+    white-space: normal;
+    text-shadow: 0 0 10px var(--amber-overlay-35);
+}
+
+/* A diff sitting inside a card is already inside a border, so it drops its own bottom margin. */
+
+.approval-card__body .diff-block {
+    margin-top: 4px;
+    margin-bottom: 0;
+}
+
+.approval-card__keys {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+/* The chips ARE the key hints — the bracketed letter is the label. Clicking works, but the card
+   is meant to be answered from the keyboard, so the visual weight goes to the key. */
+
+.approval-card__key {
+    font-size: 22px;
+    color: var(--accent-amber);
+    -unity-font-style: bold;
+    background-color: rgba(0, 0, 0, 0);
+    background-image: none;
+    border-width: 1px;
+    border-color: var(--amber-overlay-55);
+    border-radius: 0;
+    padding: 6px 14px;
+    margin: 4px 12px 4px 0;
+    text-shadow: 0 0 10px var(--amber-overlay-35);
+    transition: background-color 0.12s ease-in-out;
+}
+
+.approval-card__key:hover {
+    background-color: var(--amber-overlay-18);
+}
+
+.approval-card__key:active {
+    background-color: var(--amber-overlay-28);
+}
+
+.approval-card--command .approval-card__key {
+    color: var(--accent-red);
+    border-color: var(--red-overlay-45);
+    text-shadow: 0 0 10px var(--red-overlay-45);
+}
+
+.approval-card--command .approval-card__key:hover {
+    background-color: var(--red-overlay-08);
+}
+
+.approval-card__outcome {
+    font-size: 22px;
+    color: var(--accent-amber);
+    -unity-font-style: bold;
+    white-space: normal;
+    text-shadow: 0 0 10px var(--amber-overlay-35);
+}

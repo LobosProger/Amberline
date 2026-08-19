@@ -1,0 +1,5 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" editor-extension-mode="False">
+    <ui:VisualElement class="line--banner">
+        <ui:Label name="text" text="banner text" class="line--banner-text"/>
+    </ui:VisualElement>
+</ui:UXML>

@@ -1,0 +1,102 @@
+/* Diff block — a line diff rendered into the terminal log.
+   Added lines are phosphor green, removed lines red, unchanged dim amber. The whole block is a
+   thin dim-amber box, which is a shape nothing else in the taxonomy uses: a banner is a bright
+   2px box, a response is a left rule with a fill, a tool card is a bare left rule, an error is a
+   red rule with a red fill. A diff is a panel of data, so it gets a full quiet border.
+
+   Phosphor halo (text-shadow) is set per text-label class because UI Toolkit text-shadow does
+   NOT inherit from parent VisualElements. */
+
+.diff-block {
+    border-width: 1px;
+    border-color: var(--amber-overlay-35);
+    background-color: var(--amber-overlay-04);
+    padding: 10px 0 10px 0;
+    margin-top: 8px;
+    margin-bottom: 16px;
+    width: auto;
+    max-width: 100%;
+    flex-shrink: 1;
+    overflow: hidden;
+}
+
+.diff-block__header {
+    font-size: 22px;
+    color: var(--accent-amber);
+    -unity-font-style: bold;
+    white-space: normal;
+    padding-left: 16px;
+    padding-right: 16px;
+    margin-bottom: 8px;
+    text-shadow: 0 0 10px var(--amber-overlay-35);
+}
+
+.diff-block__rows {
+    flex-direction: column;
+    width: 100%;
+}
+
+/* Rows arrive as TemplateContainers, which default to flex-shrink:1 and would squeeze each other
+   flat once the block is taller than the space left for it. */
+
+.diff-block__rows > * {
+    flex-shrink: 0;
+}
+
+.diff-row {
+    flex-direction: row;
+    align-items: flex-start;
+    flex-shrink: 0;
+    width: 100%;
+}
+
+.diff-row__number {
+    width: 72px;
+    flex-shrink: 0;
+    font-size: 20px;
+    color: var(--amber-overlay-55);
+    -unity-font-style: bold;
+    -unity-text-align: middle-right;
+    padding-right: 12px;
+}
+
+/* Lines do not wrap. A wrapped diff line loses the alignment between the gutter and the text,
+   which is the one thing that makes a diff readable at a glance; DiffView cuts anything long
+   enough to matter before it reaches here. */
+
+.diff-row__text {
+    flex-grow: 1;
+    flex-shrink: 1;
+    font-size: 22px;
+    -unity-font-style: bold;
+    white-space: nowrap;
+    overflow: hidden;
+    padding-right: 16px;
+}
+
+.diff-row__text--added {
+    color: var(--accent-green);
+    background-color: var(--green-overlay-08);
+    text-shadow: 0 0 10px var(--green-overlay-45);
+}
+
+.diff-row__text--removed {
+    color: var(--accent-red);
+    background-color: var(--red-overlay-08);
+    text-shadow: 0 0 10px var(--red-overlay-45);
+}
+
+.diff-row__text--context {
+    color: var(--accent-amber-dim);
+    text-shadow: 0 0 10px var(--amber-overlay-35);
+}
+
+/* "N more lines not shown" and "(no changes)" — the block talking about itself rather than
+   showing a line of the file, so it is set apart in italic-weight dimness. */
+
+.diff-row__text--note {
+    font-size: 20px;
+    color: var(--amber-overlay-55);
+    padding-top: 6px;
+    text-shadow: 0 0 8px var(--amber-overlay-35);
+}

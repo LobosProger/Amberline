@@ -1,0 +1,16 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" editor-extension-mode="False">
+    <ui:VisualElement name="approval-card" class="approval-card">
+        <ui:Label name="approval-card__title" text="FILE CHANGE — NEEDS YOUR APPROVAL" class="approval-card__title"/>
+        <ui:Label name="approval-card__warning" text="warning" class="approval-card__warning approval-card__hidden"/>
+        <ui:Label name="approval-card__target" text="write_file   src/Player.cs" class="approval-card__target"/>
+        <ui:VisualElement name="approval-card__body" class="approval-card__body">
+            <ui:Label name="approval-card__preview" text="preview" class="approval-card__preview"/>
+        </ui:VisualElement>
+        <ui:VisualElement name="approval-card__keys" class="approval-card__keys">
+            <ui:Button name="approval-card__approve" text="[Y] approve" class="approval-card__key"/>
+            <ui:Button name="approval-card__reject" text="[N] reject" class="approval-card__key"/>
+            <ui:Button name="approval-card__remember" text="[A] approve every write_file this session" class="approval-card__key"/>
+        </ui:VisualElement>
+        <ui:Label name="approval-card__outcome" text="approved" class="approval-card__outcome approval-card__hidden"/>
+    </ui:VisualElement>
+</ui:UXML>

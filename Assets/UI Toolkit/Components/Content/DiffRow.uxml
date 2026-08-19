@@ -1,0 +1,6 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" editor-extension-mode="False">
+    <ui:VisualElement class="diff-row">
+        <ui:Label name="diff-row__number" text="1" class="diff-row__number"/>
+        <ui:Label name="diff-row__text" text="line text" class="diff-row__text diff-row__text--context"/>
+    </ui:VisualElement>
+</ui:UXML>

@@ -1,0 +1,93 @@
+# -----------------------------------------------------------------------------
+# Line endings
+# -----------------------------------------------------------------------------
+# Normalise text to LF in the repository; check out native on each platform.
+* text=auto
+
+# Force LF for Unity's YAML and for source, so a Windows-authored repo does not
+# produce whole-file diffs when read on Linux or macOS.
+*.cs        text eol=lf diff=csharp
+*.uxml      text eol=lf
+*.uss       text eol=lf
+*.md        text eol=lf
+*.json      text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.gitignore text eol=lf
+*.shader    text eol=lf
+*.hlsl      text eol=lf
+*.cginc     text eol=lf
+
+# -----------------------------------------------------------------------------
+# Unity YAML - smart merge
+# -----------------------------------------------------------------------------
+# Requires a one-time local setup, per clone (it cannot be configured from the
+# repository - git refuses to run merge drivers defined by cloned content):
+#
+#   git config merge.unityyamlmerge.name "Unity SmartMerge"
+#   git config merge.unityyamlmerge.driver \
+#     '"C:/Program Files/Unity/Hub/Editor/6000.4.11f1/Editor/Data/Tools/UnityYAMLMerge.exe" merge -p %O %A %B %P'
+#
+# Without that config git falls back to the normal text merge, which is noisy on
+# scene files but not destructive.
+*.unity              text eol=lf merge=unityyamlmerge
+*.prefab             text eol=lf merge=unityyamlmerge
+*.asset              text eol=lf merge=unityyamlmerge
+*.mat                text eol=lf merge=unityyamlmerge
+*.anim               text eol=lf merge=unityyamlmerge
+*.controller         text eol=lf merge=unityyamlmerge
+*.overrideController text eol=lf merge=unityyamlmerge
+*.physicMaterial     text eol=lf merge=unityyamlmerge
+*.physicsMaterial2D  text eol=lf merge=unityyamlmerge
+*.playable           text eol=lf merge=unityyamlmerge
+*.mask               text eol=lf merge=unityyamlmerge
+*.brush              text eol=lf merge=unityyamlmerge
+*.flare              text eol=lf merge=unityyamlmerge
+*.fontsettings       text eol=lf merge=unityyamlmerge
+*.guiskin            text eol=lf merge=unityyamlmerge
+*.giparams           text eol=lf merge=unityyamlmerge
+*.renderTexture      text eol=lf merge=unityyamlmerge
+*.terrainlayer       text eol=lf merge=unityyamlmerge
+*.mixer              text eol=lf merge=unityyamlmerge
+*.shadervariants     text eol=lf merge=unityyamlmerge
+*.preset             text eol=lf merge=unityyamlmerge
+*.asmdef             text eol=lf
+*.shadergraph        text eol=lf
+*.meta               text eol=lf merge=unityyamlmerge
+
+# -----------------------------------------------------------------------------
+# Binary - never diff, never line-ending-convert
+# -----------------------------------------------------------------------------
+*.ttf   binary
+*.otf   binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.psd   binary
+*.tga   binary
+*.gif   binary
+*.ico   binary
+*.dll   binary
+*.so    binary
+*.dylib binary
+*.a     binary
+*.lib   binary
+*.pdb   binary
+*.mdb   binary
+*.exe   binary
+*.gguf  binary
+*.unitypackage binary
+*.wav   binary
+*.mp3   binary
+*.ogg   binary
+*.mp4   binary
+*.fbx   binary
+*.blend binary
+
+# -----------------------------------------------------------------------------
+# GitHub language statistics - keep the repo reading as C#
+# -----------------------------------------------------------------------------
+*.uss  linguist-language=CSS
+*.uxml linguist-language=XML
+Assets/Settings/**            linguist-generated
+Assets/**/*.shadergraph       linguist-generated
