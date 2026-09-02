@@ -37,6 +37,7 @@ namespace Amberline.Agent
         public const string k_grepToolName = "grep";
         public const string k_findFileToolName = "find_file";
         public const string k_finishToolName = "finish";
+        public const string k_askUserToolName = "ask_user";
         public const string k_writeFileToolName = "write_file";
         public const string k_editFileToolName = "edit_file";
         public const string k_runCommandToolName = "run_command";
@@ -52,6 +53,7 @@ namespace Amberline.Agent
             k_writeFileToolName,
             k_editFileToolName,
             k_runCommandToolName,
+            k_askUserToolName,
             k_finishToolName
         };
 

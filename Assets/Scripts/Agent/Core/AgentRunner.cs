@@ -27,6 +27,7 @@ namespace Amberline.Agent
         // without depending on which object Unity woke up first.
         readonly AgentEvents _agentEvents = new AgentEvents();
         readonly ApprovalGate _approvalGate = new ApprovalGate();
+        readonly UserQuestionGate _userQuestionGate = new UserQuestionGate();
 
         ContextManager _contextManager;
         ChatTemplateRenderer _chatTemplateRenderer;
@@ -35,6 +36,10 @@ namespace Amberline.Agent
         ToolRegistry _toolRegistry;
         ToolRunner _toolRunner;
         AgentLoop _agentLoop;
+
+        // Held by name because the per-run question limit has to be reset when a run starts,
+        // and the registry only ever hands executors back as the interface.
+        AskUserTool _askUserTool;
 
         string _workspaceFolderPath = string.Empty;
 
@@ -64,6 +69,9 @@ namespace Amberline.Agent
         /// repeat its whole surface.
         /// </summary>
         public ApprovalGate ApprovalGate => _approvalGate;
+
+        /// <summary>The handshake behind ask_user. The terminal draws its question and answers it.</summary>
+        public UserQuestionGate UserQuestionGate => _userQuestionGate;
 
         /// <summary>The folder every tool is sandboxed to.</summary>
         public string WorkspaceFolderPath => _workspaceFolderPath;
@@ -161,6 +169,8 @@ namespace Amberline.Agent
             _toolRegistry.RegisterExecutor(new WriteFileTool(_pathSandbox, _fileWriteService));
             _toolRegistry.RegisterExecutor(new EditFileTool(_pathSandbox, _fileWriteService));
             _toolRegistry.RegisterExecutor(new RunCommandTool(BuildCommandRunnerForWorkspaceFolder(workspaceFolderPath)));
+            _askUserTool = new AskUserTool(_userQuestionGate.AskAsync);
+            _toolRegistry.RegisterExecutor(_askUserTool);
             _toolRegistry.RegisterExecutor(new FinishTool());
 
             _toolRunner = new ToolRunner(_toolRegistry, _approvalGate.RequestApprovalAsync);
@@ -214,9 +224,21 @@ namespace Amberline.Agent
             // A rejection binds the run it was given in. Carrying it further would leave a user who
             // says "go on, do it" on the next turn unable to be asked at all.
             _approvalGate.ForgetCallsTheUserRejected();
+            _askUserTool?.ForgetQuestionsAskedInThePreviousRun();
 
             await EnsureSystemPromptIsPinnedAsync();
-            return await _agentLoop.RunAsync(userTaskText, cancellationToken);
+
+            try
+            {
+                return await _agentLoop.RunAsync(userTaskText, cancellationToken);
+            }
+            finally
+            {
+                // A question that outlived its run would leave the terminal waiting for an answer
+                // nothing is going to read. The loop reports a cancel as a value rather than
+                // throwing, so this is the one place guaranteed to run however the run ended.
+                _userQuestionGate.CancelPendingQuestion();
+            }
         }
 
         /// <summary>

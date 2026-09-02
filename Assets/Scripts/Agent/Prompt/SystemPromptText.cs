@@ -56,6 +56,7 @@ namespace Amberline.Agent
             "write_file {\"path\": \"New.cs\", \"content\": \"whole file\"}\n" +
             "edit_file {\"path\": \"Player.cs\", \"find\": \"old\", \"replace\": \"new\"}\n" +
             "run_command {\"command\": \"python hello.py\"}\n" +
+            "ask_user {\"question\": \"what should the new name be?\"}\n" +
             "finish {\"summary\": \"what you did\"}\n\n" +
 
             "Rules:\n" +
@@ -67,6 +68,7 @@ namespace Amberline.Agent
             "- To create a file call write_file, never a shell redirect.\n" +
             "- Writes and commands need approval; if one is rejected, do not repeat it.\n" +
             "- Read a file before editing it.\n" +
+            "- ask_user only when the task cannot go on without an answer. Look first, never ask what a tool can tell you.\n" +
             "- Call finish once the work is really done, never to announce what you are about to do.\n\n" +
 
             "Examples:\n\n" +

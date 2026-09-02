@@ -93,6 +93,7 @@ namespace Amberline.Ui
         const string k_idleStateText = "idle";
         const string k_workingStateText = "working";
         const string k_cancelledStateText = "cancelled";
+        const string k_waitingForAnswerStateText = "waiting for you";
         const string k_cancelledNoticeText = "cancelled.";
 
         const int k_maximumCharactersOfAToolArgumentOnScreen = 80;
@@ -102,7 +103,11 @@ namespace Amberline.Ui
         const string k_toolCardSuffixWhenItFailed = "  failed";
 
         // The one argument worth putting on a tool card, per tool, in the order they are tried.
-        static readonly string[] k_argumentNamesWorthShowingOnACard = { "path", "command", "pattern", "summary" };
+        // Every tool has to have one of these, or its card reads as a bare tool name.
+        static readonly string[] k_argumentNamesWorthShowingOnACard =
+        {
+            "path", "command", "pattern", "name", "question", "summary"
+        };
 
         const int k_maximumCharactersOfACommandOutputLineOnScreen = 200;
 
@@ -156,6 +161,7 @@ namespace Amberline.Ui
             _commandInputView.OnCancelRequested += OnCancelRequested;
 
             SubscribeToAgentEvents();
+            SubscribeToQuestionEvents();
             _approvalFlowPresenter.Subscribe();
         }
 
@@ -165,6 +171,7 @@ namespace Amberline.Ui
             _commandInputView.OnCancelRequested -= OnCancelRequested;
 
             UnsubscribeFromAgentEvents();
+            UnsubscribeFromQuestionEvents();
             _approvalFlowPresenter.Unsubscribe();
 
             CancelCurrentTurn();
@@ -198,6 +205,22 @@ namespace Amberline.Ui
             _agentRunner.Events.OnCommandOutputLineProduced -= HandleCommandOutputLineProduced;
             _agentRunner.Events.OnNoticeProduced -= HandleNoticeProduced;
             _agentRunner.Events.OnRunFinished -= HandleRunFinished;
+        }
+
+        void SubscribeToQuestionEvents()
+        {
+            if (_agentRunner == null) return;
+
+            _agentRunner.UserQuestionGate.OnQuestionAsked += HandleQuestionAsked;
+            _agentRunner.UserQuestionGate.OnQuestionResolved += HandleQuestionResolved;
+        }
+
+        void UnsubscribeFromQuestionEvents()
+        {
+            if (_agentRunner == null) return;
+
+            _agentRunner.UserQuestionGate.OnQuestionAsked -= HandleQuestionAsked;
+            _agentRunner.UserQuestionGate.OnQuestionResolved -= HandleQuestionResolved;
         }
 
         void Start()
@@ -263,9 +286,55 @@ namespace Amberline.Ui
 
         void OnCommandSubmitted(string submittedCommand)
         {
+            // An open question is answered before anything else looks at this line, and the answer
+            // deliberately never touches the machinery below. That path replaces the turn's
+            // cancellation source - disposing the one the running turn is holding - echoes the line
+            // as a new command, and hands anything starting with a slash to the command table,
+            // where /cd would rebuild the tool stack out from under the loop that asked.
+            if (TrySubmitAnswerToTheQuestionOnScreen(submittedCommand)) return;
+
             if (_isTurnInProgress) return;
 
             HandleSubmittedCommandAsync(submittedCommand).Forget();
+        }
+
+        bool TrySubmitAnswerToTheQuestionOnScreen(string submittedText)
+        {
+            if (_agentRunner == null) return false;
+            if (!_agentRunner.UserQuestionGate.IsWaitingForTheUser) return false;
+
+            // Echoed here rather than by the usual path, so the answer reads back the way a command
+            // does without going anywhere near the turn machinery.
+            _terminalView.AppendLineInstant($"> {submittedText}", TerminalLineKind.UserCommand);
+
+            _agentRunner.UserQuestionGate.SubmitAnswer(submittedText);
+            return true;
+        }
+
+        // The run is parked on an answer, so the row that is locked for the length of a turn has to
+        // open for exactly as long as the question is on screen.
+        void HandleQuestionAsked(string questionText)
+        {
+            FinishTheThoughtAndTheRunningToolCard();
+
+            _terminalView.AppendLineInstant($"? {questionText}", TerminalLineKind.AgentMessage);
+            _terminalView.AppendLineInstant("  type your answer and press enter, or press esc to stop the run.", TerminalLineKind.Notice);
+
+            if (_autoScrollView != null)
+                _autoScrollView.PinToBottom();
+
+            _commandInputView.SetInputLocked(false);
+            ShowStateWithContextUsage(k_waitingForAnswerStateText);
+        }
+
+        // Raised for every way a question stops being pending, answered or cancelled, so the row
+        // can never be left open over a run that is still working.
+        void HandleQuestionResolved()
+        {
+            if (!_isTurnInProgress) return;
+
+            _commandInputView.SetInputLocked(true);
+            ShowStateWithContextUsage(k_workingStateText);
         }
 
         async UniTaskVoid HandleSubmittedCommandAsync(string submittedCommand)

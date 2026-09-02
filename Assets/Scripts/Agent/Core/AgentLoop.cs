@@ -630,7 +630,13 @@ namespace Amberline.Agent
                 return;
             }
 
-            if (toolCall.ToolName == ToolRegistry.k_finishToolName)
+            // finish is not work, and neither is asking. A run that only put a question on
+            // screen has changed nothing and looked at nothing, so the guard that refuses an empty
+            // finish has to still be armed after it - otherwise "ask something, then finish" ends
+            // the run with a confident summary of work that was never done, which is the exact
+            // failure that guard exists for.
+            if (toolCall.ToolName == ToolRegistry.k_finishToolName ||
+                toolCall.ToolName == ToolRegistry.k_askUserToolName)
             {
                 return;
             }
