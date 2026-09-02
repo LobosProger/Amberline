@@ -61,6 +61,9 @@ namespace Amberline.Agent
         // a merged user turn - a few tokens, paid to never rewrite a turn.
         const string k_noThinkMarker = "/no_think";
 
+        // Long enough to name a path, short enough that the stand-in stays one line.
+        const int k_maximumArgumentCharactersInATrimmedLine = 80;
+
         const string k_summaryRequest =
             "Summarise everything above so the work can continue without it. Use exactly these sections, one short line each:\n" +
             "TASK:\nFILES TOUCHED:\nDECISIONS:\nCURRENT STEP:\nNEXT STEP:\n" +
@@ -153,6 +156,44 @@ namespace Amberline.Agent
         {
             string toolResponseText = $"{k_toolResponseOpenTag}\n{toolOutputText}\n{k_toolResponseCloseTag}\n{k_formatReminder}";
             return AppendTheNoThinkMarkerWhenTheModelUnderstandsIt(toolResponseText);
+        }
+
+        /// <summary>
+        /// The one-line stand-in that replaces a read-only tool's output once the window fills up.
+        /// Built through the same wrapper as the real result, so the format reminder and the
+        /// reasoning marker are identical and only the body between the tags is shorter.
+        /// </summary>
+        /// <remarks>
+        /// It names the call rather than just saying something was removed, because the model's
+        /// next move has to be available to it: the sentence it reads is the instruction for how
+        /// to get the content back. Written in the same voice as
+        /// <c>ToolOutputTruncator.BuildTruncationNote</c>, which tells the model how to see the
+        /// rest of an output that was too long to send whole.
+        /// </remarks>
+        public string BuildTrimmedToolResultMessageText(ToolCall toolCall)
+        {
+            return BuildToolResultMessageText(
+                $"[the output of {DescribeCallInOneLine(toolCall)} was dropped to free up context. " +
+                "Call it again if you still need what it said.]");
+        }
+
+        // "read_file path=Player.cs start_line=1 end_line=200". Long values are cut, because a
+        // write_file content would otherwise put the whole file back into the line meant to
+        // replace it - and this runs for every trimmable tool, present and future.
+        static string DescribeCallInOneLine(ToolCall toolCall)
+        {
+            if (toolCall == null) return "an earlier tool call";
+
+            var descriptionBuilder = new StringBuilder(toolCall.ToolName);
+
+            foreach (var argument in toolCall.Arguments)
+            {
+                descriptionBuilder.Append(' ').Append(argument.Key).Append('=');
+                descriptionBuilder.Append(ToolOutputTruncator.ShortenSingleLine(argument.Value,
+                    k_maximumArgumentCharactersInATrimmedLine));
+            }
+
+            return descriptionBuilder.ToString();
         }
 
         /// <summary>

@@ -38,7 +38,10 @@ namespace Amberline.Agent
             // reader already does with them missing. Measured: a model that wrote read_file with
             // only a path inside its plan spent a whole round trip being told to add two numbers
             // this tool was going to default anyway.
-            parameterNamesWithASafeDefault: new[] { "start_line", "end_line" });
+            parameterNamesWithASafeDefault: new[] { "start_line", "end_line" },
+            // A file the model read once can always be read again, and a 200-line window is
+            // the single most expensive thing that ever enters the transcript.
+            canItsOutputBeDroppedFromHistory: true);
 
         const long k_maximumFileSizeInBytes = 16L * 1024L * 1024L;
         const int k_binarySniffByteCount = 4096;

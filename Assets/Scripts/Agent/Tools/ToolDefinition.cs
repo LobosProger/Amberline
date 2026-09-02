@@ -41,8 +41,20 @@ namespace Amberline.Agent
         /// <summary>How many tokens the model may spend producing a call to this tool.</summary>
         public int MaximumResponseTokens { get; }
 
+        /// <summary>
+        /// True when this tool's output may be replaced by a one-line stand-in once the context
+        /// window fills up, because calling the tool again would produce it afresh.
+        /// </summary>
+        /// <remarks>
+        /// Stated per tool rather than derived from <see cref="IsMutating"/>. `finish` and
+        /// `ask_user` are not mutating either, and neither one may be trimmed: a user's answer
+        /// cannot be fetched again by calling anything.
+        /// </remarks>
+        public bool CanItsOutputBeDroppedFromHistory { get; }
+
         public ToolDefinition(string name, IReadOnlyList<string> parameterNames, bool isMutating, bool isCommand,
-            int maximumResponseTokens, IReadOnlyList<string> parameterNamesWithASafeDefault = null)
+            int maximumResponseTokens, IReadOnlyList<string> parameterNamesWithASafeDefault = null,
+            bool canItsOutputBeDroppedFromHistory = false)
         {
             Name = name;
             ParameterNames = parameterNames ?? new List<string>();
@@ -50,6 +62,7 @@ namespace Amberline.Agent
             IsMutating = isMutating;
             IsCommand = isCommand;
             MaximumResponseTokens = maximumResponseTokens;
+            CanItsOutputBeDroppedFromHistory = canItsOutputBeDroppedFromHistory;
         }
 
         /// <summary>True when the executor can run without <paramref name="parameterName"/>.</summary>

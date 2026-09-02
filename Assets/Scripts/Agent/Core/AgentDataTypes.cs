@@ -19,18 +19,46 @@ namespace Amberline.Agent
     /// rather than recomputed on every context check - counting is a native call and the text
     /// never changes after insertion.
     /// </summary>
+    /// <remarks>
+    /// Immutable, including <see cref="ShorterTextThatCanReplaceThis"/>. Trimming a message means
+    /// building a new one from the shorter text and putting it back in the same slot, never
+    /// editing this object - see <see cref="ContextManager"/>, which is the only class allowed to
+    /// do it, because it also has to re-measure the tokens.
+    /// </remarks>
     public class ChatMessage
     {
         public ChatRole Role { get; }
         public string Text { get; }
         public int TokenCount { get; }
 
-        public ChatMessage(ChatRole role, string text, int tokenCount)
+        /// <summary>
+        /// A one-line stand-in for <see cref="Text"/>, or null when this message must be kept
+        /// whole. Set for the output of a read-only tool: a 200-line file listing is worth
+        /// hundreds of tokens for the rest of the session, and the model can simply call the tool
+        /// again if it turns out to still need it.
+        /// </summary>
+        /// <remarks>
+        /// There is no separate "already trimmed" flag on purpose. A message is trimmed exactly
+        /// when its text already equals this string, so trimming twice is a no-op and cannot
+        /// quietly re-measure or re-render anything.
+        /// </remarks>
+        public string ShorterTextThatCanReplaceThis { get; }
+
+        public ChatMessage(ChatRole role, string text, int tokenCount, string shorterTextThatCanReplaceThis = null)
         {
             Role = role;
             Text = text ?? string.Empty;
             TokenCount = tokenCount;
+            ShorterTextThatCanReplaceThis = shorterTextThatCanReplaceThis;
         }
+
+        /// <summary>
+        /// True when this message still carries a full tool output that a shorter line could
+        /// stand in for. False once it has been trimmed, and false when it was never trimmable.
+        /// </summary>
+        public bool CanBeTrimmed =>
+            !string.IsNullOrEmpty(ShorterTextThatCanReplaceThis) &&
+            !string.Equals(Text, ShorterTextThatCanReplaceThis, StringComparison.Ordinal);
     }
 
     /// <summary>

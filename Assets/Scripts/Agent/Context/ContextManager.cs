@@ -36,6 +36,9 @@ namespace Amberline.Agent
         // Replacing a single old message with a summary of it buys nothing.
         const int k_minimumAmountOfOlderMessagesWorthCompacting = 2;
 
+        // Below this, the sentence that says an output was dropped can cost more than the output.
+        const int k_defaultMinimumCharactersWorthDropping = 400;
+
         const string k_prefixOfCompactedSummaryMessage = "[Summary of the earlier conversation]\n";
 
         /// <summary>
@@ -87,9 +90,11 @@ namespace Amberline.Agent
         /// Appends a user turn. Tool results come through here too - this agent has no separate
         /// tool role, they are fed back as user turns.
         /// </summary>
-        public async UniTask AddUserMessageAsync(string text)
+        /// <param name="shorterTextThatCanReplaceThis">A one-line stand-in this message may be cut
+        /// down to when the window fills up, or null when it has to be kept whole.</param>
+        public async UniTask AddUserMessageAsync(string text, string shorterTextThatCanReplaceThis = null)
         {
-            await AddMessageToEndOfTranscriptAsync(ChatRole.User, text);
+            await AddMessageToEndOfTranscriptAsync(ChatRole.User, text, shorterTextThatCanReplaceThis);
         }
 
         /// <summary>Appends an assistant turn, normally the text the model just generated.</summary>
@@ -135,6 +140,80 @@ namespace Amberline.Agent
             }
 
             _messages.RemoveRange(indexOfFirstConversationMessage, amountOfConversationMessages);
+        }
+
+        /// <summary>
+        /// Cuts the older tool outputs down to their one-line stand-ins and returns how many tokens
+        /// that freed. The cheap half of making room: nothing is summarised, nothing is reworded,
+        /// and the model can call the tool again if it turns out to still need what was dropped.
+        /// </summary>
+        /// <remarks>
+        /// Only messages that carry a stand-in are touched, which today means the output of a
+        /// read-only tool. A message shorter than
+        /// <paramref name="minimumCharactersWorthDropping"/> is left alone, because replacing a
+        /// short result with a sentence about a short result can cost more than it saves.
+        /// <para>
+        /// The newest messages are never touched, and that limit is not cosmetic. Stubbing the last
+        /// result was measured making the model immediately re-read the file it had just read,
+        /// which then tripped the repeat detector - see the note on
+        /// <see cref="k_minimumAmountOfRecentMessagesKept"/>. The caller has a second obligation
+        /// for the same reason: after this returns a non-zero count, the run's memory of which
+        /// calls it has already made has to be reset, or the model is refused the one move the
+        /// stand-in just told it to make.
+        /// </para>
+        /// </remarks>
+        public async UniTask<int> ReplaceOlderToolOutputsWithTheirShorterTextAsync(
+            int amountOfRecentMessagesToKeep = k_defaultAmountOfRecentMessagesKeptWhenCompacting,
+            int minimumCharactersWorthDropping = k_defaultMinimumCharactersWorthDropping)
+        {
+            int amountOfMessagesKeptAtTail = Math.Max(k_minimumAmountOfRecentMessagesKept, amountOfRecentMessagesToKeep);
+            int indexOfFirstOlderMessage = GetIndexOfFirstMessageAfterPinnedBlock();
+            int indexAfterLastOlderMessage = _messages.Count - amountOfMessagesKeptAtTail;
+
+            int amountOfTokensFreed = 0;
+
+            for (int messageIndex = indexOfFirstOlderMessage; messageIndex < indexAfterLastOlderMessage; messageIndex++)
+            {
+                amountOfTokensFreed += await ReplaceOneMessageWithItsShorterTextAsync(messageIndex, minimumCharactersWorthDropping);
+            }
+
+            return amountOfTokensFreed;
+        }
+
+        // Returns the tokens this one message gave back, and zero whenever it was left as it was.
+        // A message is rebuilt rather than edited: ChatMessage is immutable, and the replacement
+        // has to be re-measured anyway.
+        async UniTask<int> ReplaceOneMessageWithItsShorterTextAsync(int messageIndex, int minimumCharactersWorthDropping)
+        {
+            var messageBeingTrimmed = _messages[messageIndex];
+
+            if (!messageBeingTrimmed.CanBeTrimmed)
+            {
+                return 0;
+            }
+
+            if (messageBeingTrimmed.Text.Length < minimumCharactersWorthDropping)
+            {
+                return 0;
+            }
+
+            // The stand-in must never be empty. An empty turn is dropped entirely at render time,
+            // which would merge the turns on either side of it into one and move every byte after
+            // this point - a far larger change than the one being made here.
+            if (string.IsNullOrWhiteSpace(messageBeingTrimmed.ShorterTextThatCanReplaceThis))
+            {
+                Debug.LogWarning("ContextManager: a message carried an empty stand-in, so it was left whole.");
+                return 0;
+            }
+
+            var trimmedMessage = await CreateMessageWithMeasuredTokenCountAsync(
+                messageBeingTrimmed.Role,
+                messageBeingTrimmed.ShorterTextThatCanReplaceThis,
+                messageBeingTrimmed.ShorterTextThatCanReplaceThis);
+
+            _messages[messageIndex] = trimmedMessage;
+
+            return Math.Max(0, messageBeingTrimmed.TokenCount - trimmedMessage.TokenCount);
         }
 
         /// <summary>
@@ -194,12 +273,18 @@ namespace Amberline.Agent
             return true;
         }
 
-        async UniTask<ChatMessage> CreateMessageWithMeasuredTokenCountAsync(ChatRole role, string text)
+        async UniTask<ChatMessage> CreateMessageWithMeasuredTokenCountAsync(ChatRole role, string text,
+            string shorterTextThatCanReplaceThis = null)
         {
             int amountOfTokensInText = await CountTokensInTextAsync(text);
-            return new ChatMessage(role, text, amountOfTokensInText);
+            return new ChatMessage(role, text, amountOfTokensInText, shorterTextThatCanReplaceThis);
         }
 
+        // A zero for text that is plainly not empty means the tokenizer refused - it declines while
+        // a generation holds the single slot, and it swallows its own errors and answers zero. Left
+        // as it comes back, that zero would be stored as this message's real cost, and enough of
+        // them would hold the running total below the threshold that triggers compaction, so the
+        // window would fill up for real with nothing ever reporting that it was close.
         async UniTask<int> CountTokensInTextAsync(string text)
         {
             if (string.IsNullOrEmpty(text))
@@ -212,7 +297,14 @@ namespace Amberline.Agent
                 return EstimateTokenCountFromCharacterLength(text);
             }
 
-            return await _countTokensInTextAsync(text);
+            int measuredTokenCount = await _countTokensInTextAsync(text);
+            if (measuredTokenCount > 0)
+            {
+                return measuredTokenCount;
+            }
+
+            Debug.LogWarning("ContextManager: the tokenizer reported zero tokens for a message that has text, so the length estimate was used instead.");
+            return EstimateTokenCountFromCharacterLength(text);
         }
 
         int EstimateTokenCountFromCharacterLength(string text)
@@ -220,7 +312,8 @@ namespace Amberline.Agent
             return Math.Max(1, text.Length / k_averageCharactersPerTokenForEstimate);
         }
 
-        async UniTask AddMessageToEndOfTranscriptAsync(ChatRole role, string text)
+        async UniTask AddMessageToEndOfTranscriptAsync(ChatRole role, string text,
+            string shorterTextThatCanReplaceThis = null)
         {
             if (string.IsNullOrWhiteSpace(text))
             {
@@ -228,7 +321,9 @@ namespace Amberline.Agent
                 return;
             }
 
-            var messageWithMeasuredTokens = await CreateMessageWithMeasuredTokenCountAsync(role, text);
+            var messageWithMeasuredTokens =
+                await CreateMessageWithMeasuredTokenCountAsync(role, text, shorterTextThatCanReplaceThis);
+
             _messages.Add(messageWithMeasuredTokens);
         }
 

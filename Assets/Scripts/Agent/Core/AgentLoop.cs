@@ -47,6 +47,11 @@ namespace Amberline.Agent
 
         int _llmRoundTripsUsedInThisRun;
         bool _hasAutomaticCompactionFailedInThisRun;
+
+        // Separate from the flag above on purpose. Dropping old tool output and summarising are
+        // two different attempts at the same problem, and one summary that came back empty must
+        // not switch off the half that needs no model call.
+        bool _haveOlderToolOutputsAlreadyBeenDroppedInThisRun;
         bool _hasAnyToolSucceededInThisRun;
         bool _wasAnEmptyFinishAlreadyRefusedInThisRun;
 
@@ -119,6 +124,7 @@ namespace Amberline.Agent
         {
             _llmRoundTripsUsedInThisRun = 0;
             _hasAutomaticCompactionFailedInThisRun = false;
+            _haveOlderToolOutputsAlreadyBeenDroppedInThisRun = false;
             _hasAnyToolSucceededInThisRun = false;
             _wasAnEmptyFinishAlreadyRefusedInThisRun = false;
             _repeatedCallDetector.Reset();
@@ -157,17 +163,41 @@ namespace Amberline.Agent
         }
 
         /// <summary>
-        /// Folds the older half of the transcript into one summary message, so a long run can carry
-        /// on inside a small window. Backs /compact, and the loop calls it on its own once the
-        /// transcript approaches the window. Returns false - leaving the transcript untouched - when
-        /// there is too little to compact, when the model would not answer, or when the summary came
-        /// back empty. A transcript that was not rewritten is always better than one replaced by
-        /// nothing.
+        /// Makes room in the window, in two passes: the bodies of older read-only tool outputs are
+        /// dropped for a one-line stand-in, and then whatever is left of the older half is folded
+        /// into a single summary. Backs /compact.
         /// </summary>
+        /// <remarks>
+        /// Dropping comes first because it costs no model call and invents nothing - the content is
+        /// gone rather than paraphrased, and the model is told it can call the tool again. Only the
+        /// second pass asks the model to write an account of what happened, which is the part worth
+        /// avoiding while there is a cheaper option left.
+        /// <para>
+        /// Returns false only when NEITHER pass changed anything: too little to work with, a model
+        /// that would not answer, or a summary that came back empty. A transcript that was left
+        /// alone is always better than one replaced by nothing.
+        /// </para>
+        /// </remarks>
         public async UniTask<bool> CompactTranscriptAsync(CancellationToken cancellationToken)
         {
-            return await _contextManager.CompactOlderMessagesAsync(
+            // Same order the automatic path uses: drop what can simply be fetched again before
+            // asking the model to paraphrase anything. Both halves run, because /compact is the
+            // user asking for as much room as can be had rather than for just enough.
+            int amountOfTokensFreedByDroppingToolOutput =
+                await _contextManager.ReplaceOlderToolOutputsWithTheirShorterTextAsync();
+
+            if (amountOfTokensFreedByDroppingToolOutput > 0)
+            {
+                _repeatedCallDetector.Reset();
+
+                _agentEvents.RaiseNoticeProduced(
+                    $"the older tool output was dropped to free up context, {amountOfTokensFreedByDroppingToolOutput} tokens back");
+            }
+
+            bool wasTheOlderPartSummarised = await _contextManager.CompactOlderMessagesAsync(
                 olderMessages => SummariseOlderMessagesAsync(olderMessages, cancellationToken));
+
+            return wasTheOlderPartSummarised || amountOfTokensFreedByDroppingToolOutput > 0;
         }
 
         // The summariser ContextManager is handed. It is an ordinary unconstrained generation over
@@ -254,12 +284,20 @@ namespace Amberline.Agent
         // exactly the long tasks that needed the compaction.
         async UniTask CompactTheTranscriptWhenItIsNearlyTooLongAsync(CancellationToken cancellationToken)
         {
-            if (_hasAutomaticCompactionFailedInThisRun)
+            if (!IsTheTranscriptCloseToFillingTheWindow())
             {
                 return;
             }
 
-            if (!IsTheTranscriptCloseToFillingTheWindow())
+            // First and cheapest: drop the bodies of old read-only tool outputs. It costs no model
+            // call at all, so it is tried before anything is paraphrased - a summary is the model's
+            // account of what happened, and the model is the thing least worth trusting here.
+            if (await DropOlderToolOutputsAndReportWhetherThatWasEnoughAsync())
+            {
+                return;
+            }
+
+            if (_hasAutomaticCompactionFailedInThisRun)
             {
                 return;
             }
@@ -279,6 +317,37 @@ namespace Amberline.Agent
             // whole run summarising instead of working.
             _hasAutomaticCompactionFailedInThisRun = true;
             _agentEvents.RaiseNoticeProduced("the conversation could not be summarised, so it was left as it is");
+        }
+
+        // Returns true when the transcript came back under the threshold on its own, so no summary
+        // is needed this iteration.
+        async UniTask<bool> DropOlderToolOutputsAndReportWhetherThatWasEnoughAsync()
+        {
+            if (_haveOlderToolOutputsAlreadyBeenDroppedInThisRun)
+            {
+                return false;
+            }
+
+            int amountOfTokensFreed = await _contextManager.ReplaceOlderToolOutputsWithTheirShorterTextAsync();
+
+            if (amountOfTokensFreed <= 0)
+            {
+                // Nothing was trimmable this time, and nothing will have become trimmable by the
+                // next iteration either: the newest messages are deliberately out of reach and the
+                // rest have already been looked at.
+                _haveOlderToolOutputsAlreadyBeenDroppedInThisRun = true;
+                return false;
+            }
+
+            // The run has been told, in the transcript, to call those tools again if it needs what
+            // they said. The memory of which calls have already been made would refuse exactly that
+            // - "you already have the answer above" is no longer true of anything.
+            _repeatedCallDetector.Reset();
+
+            _agentEvents.RaiseNoticeProduced(
+                $"the older tool output was dropped to free up context, {amountOfTokensFreed} tokens back");
+
+            return !IsTheTranscriptCloseToFillingTheWindow();
         }
 
         bool IsTheTranscriptCloseToFillingTheWindow()
@@ -344,7 +413,7 @@ namespace Amberline.Agent
                 return new RunReport(true, toolResult.Output, _llmRoundTripsUsedInThisRun);
             }
 
-            await AppendToolResultToTranscriptAsync(toolResult);
+            await AppendToolResultToTranscriptAsync(parseResult, toolResult);
             return null;
         }
 
@@ -591,9 +660,29 @@ namespace Amberline.Agent
         // Decorated HERE, at insert time, and never at render time. The text that goes in is the
         // text that is token-counted and the text every later prompt reproduces byte for byte -
         // decorating on the way out would quietly break the append-only guarantee the cache rests on.
-        async UniTask AppendToolResultToTranscriptAsync(ToolResult toolResult)
+        async UniTask AppendToolResultToTranscriptAsync(ToolCallParseResult parseResult, ToolResult toolResult)
         {
-            await _contextManager.AddUserMessageAsync(_promptBuilder.BuildToolResultMessageText(toolResult.Output));
+            await _contextManager.AddUserMessageAsync(
+                _promptBuilder.BuildToolResultMessageText(toolResult.Output),
+                BuildShorterTextThisResultCanBeCutDownToLater(parseResult, toolResult));
+        }
+
+        // Worked out now, while the call that produced this output is still in hand, and carried
+        // along with the message. By the time the window fills up, nothing in the transcript says
+        // which tool wrote which result - the text between the tags is the output and nothing else.
+        //
+        // Null for everything that has to be kept whole: a failure the model still has to read, and
+        // any tool whose output cannot simply be fetched again by calling it a second time.
+        string BuildShorterTextThisResultCanBeCutDownToLater(ToolCallParseResult parseResult, ToolResult toolResult)
+        {
+            if (!toolResult.IsSuccess) return null;
+            if (parseResult == null || !parseResult.IsToolCall || parseResult.Call == null) return null;
+
+            var toolExecutor = _toolRegistry.FindExecutorForToolName(parseResult.Call.ToolName);
+            if (toolExecutor?.Definition == null) return null;
+            if (!toolExecutor.Definition.CanItsOutputBeDroppedFromHistory) return null;
+
+            return _promptBuilder.BuildTrimmedToolResultMessageText(parseResult.Call);
         }
 
         // The model wrote its plan and kept going into the call. Taking that call is worth a whole

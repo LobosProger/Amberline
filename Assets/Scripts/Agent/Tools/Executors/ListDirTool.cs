@@ -32,7 +32,8 @@ namespace Amberline.Agent
             maximumResponseTokens: 512,
             // A missing path already means the project root inside this executor, so refusing the
             // call for it would only cost a round trip to be told what it was going to assume.
-            parameterNamesWithASafeDefault: new[] { "path" });
+            parameterNamesWithASafeDefault: new[] { "path" },
+            canItsOutputBeDroppedFromHistory: true);
 
         const int k_maximumWalkDepth = 2;
         const int k_maximumEntriesToCollect = 20000;
