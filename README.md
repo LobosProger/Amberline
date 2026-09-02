@@ -75,7 +75,7 @@ A ReAct coding agent — plan, call a tool, read the result, repeat — with thr
 - **The approval gate is the product, not a safety bolt-on.** An 8B model on a consumer GPU is not trustworthy enough to write to your disk unattended, so it never does. Every write, every edit and every shell command stops the loop and draws a card you answer with a keypress.
 - **Unity is only the host.** The agent knows nothing about Unity — no `AssetDatabase`, no editor APIs, no Unity-specific tools. Verification is a generic `run_command`, so `dotnet build`, `npm run build` and `pytest` are all the same thing to it. The acceptance run for shell commands deliberately drove a plain `dotnet new console` project outside the Unity project, to prove the point.
 
-The terminal itself is UI Toolkit rendered to a texture, put through a CRT shader as a URP full-screen pass: scanlines, vignette, and bloom at 3.0 for the amber glow.
+The terminal itself is UI Toolkit rendered to a texture, put through a CRT shader as a URP full-screen pass: scanlines, vignette, and bloom at 3.0 for the amber glow. The status bar carries a live tokens-per-second reading, which is measured here rather than read off the backend — LLM for Unity returns the generated string and nothing else, so the gateway times the call and calibrates a characters-per-token ratio against the real tokenizer after every pass.
 
 ---
 
@@ -195,17 +195,21 @@ With `runInBackground` off and the Unity window unfocused, the player loop freez
 
 ## What it can do
 
-| Tool | Phase | Notes |
-|---|---|---|
-| `read_file(path, start_line, end_line)` | from the start | line-numbered, 200-line / 64 KB budget, binary guard, footer naming the line to continue from |
-| `list_dir(path)` | from the start | hand-written walk, two levels, prunes denied folders before entering them |
-| `grep(pattern, path)` | from the start | literal, case-insensitive, grouped per file. Deliberately not regex — a regex needs escaping twice, which is where small models break |
-| `finish(summary)` | from the start | ends the run |
-| `write_file(path, content)` | after the first read | dry run, diff, approval, journal, atomic write |
-| `edit_file(path, find, replace)` | after the first read | three-stage match (exact, CRLF-normalised, indentation-tolerant), unique occurrence required, near-miss hints |
-| `run_command(command)` | after the first read | **always** approval-gated, in every permission mode |
+| Tool | Notes |
+|---|---|
+| `read_file(path, start_line, end_line)` | line-numbered, 200-line / 64 KB budget, binary guard, footer naming the line to continue from |
+| `list_dir(path)` | hand-written walk, two levels, prunes denied folders before entering them |
+| `grep(pattern, path)` | literal, case-insensitive, grouped per file. Deliberately not regex — a regex needs escaping twice, which is where small models break |
+| `find_file(name)` | finds a file by name anywhere under the workspace. Literal substring, always from the root — one argument fewer to get wrong |
+| `write_file(path, content)` | dry run, diff, approval, journal, atomic write |
+| `edit_file(path, find, replace)` | three-stage match (exact, CRLF-normalised, indentation-tolerant), unique occurrence required, near-miss hints |
+| `run_command(command)` | **always** approval-gated, in every permission mode |
+| `ask_user(question)` | stops the run, unlocks the input row, and feeds the answer back as a tool result. Three per run |
+| `finish(summary)` | ends the run |
 
-Slash commands: `/help`, `/cwd`, `/context`, `/tools`, `/approve-mode`, `/compact`, `/undo`, `/clear`, `/exit`. Escape cancels a running turn.
+All nine are callable from the first turn. There used to be a two-phase gate that unlocked the mutating three after a successful read; it was removed in M7 because the grammar is built from the callable list, so on turn one the model was constrained out of the tools the prompt had just described — asked to create a file, it called `finish` and the run ended with nothing on disk.
+
+Slash commands: `/help`, `/cwd`, `/cd`, `/context`, `/tools`, `/approve-mode`, `/compact`, `/resume`, `/undo`, `/clear`, `/exit`. Escape cancels a running turn.
 
 `run_command` runs through the platform shell in the workspace root, closes stdin so an interactive prompt hits EOF instead of hanging forever, streams stdout and stderr into the terminal line by line while the command runs, kills the whole process tree with `taskkill /T` on cancel, and has a hard 180-second timeout.
 
@@ -220,7 +224,7 @@ Read this before the setup section, not after.
 - **Windows only.** macOS and Linux are not verified and are explicitly out of scope. The shell integration, the process-tree kill and the reserved-device-name rules are all Windows-shaped.
 - **An 8B model on a consumer GPU is what it is.** It fixes a compiler error it can see. It can also write `a + b` in a method called `Multiply`, and it will re-propose an edit you just rejected. It is a competent junior with no memory and no judgement, which is why nothing it writes reaches disk without a keypress.
 - **Qwen3-family models only.** The ChatML envelope is rendered by hand for Qwen; a Llama-3.2-format model would not work through it. A smaller `Qwen3.5-4B` is a promising fit for the memory budget but its chat template is unverified, so it is not claimed to work.
-- **Context is tight.** 6144 tokens is near the arithmetic maximum for this model on an 8 GiB card. An exploration-heavy run finished at 91% of the window; the verification run finished at 32%, because a whole `dotnet build` costs about 90 tokens in the transcript while a `read_file` costs hundreds. `/compact` works and was measured taking a two-run transcript from 2440 to 934 tokens; the automatic 75% trigger has never fired in a real run, so only the manual path is proven.
+- **Context is tight.** 6144 tokens is near the arithmetic maximum for this model on an 8 GiB card. An exploration-heavy run finished at 91% of the window; the verification run finished at 32%, because a whole `dotnet build` costs about 90 tokens in the transcript while a `read_file` costs hundreds. Making room now happens in two tiers: the bodies of old `read_file`, `list_dir`, `grep` and `find_file` results are replaced by a line naming the call that produced them, and only if that is not enough is the model asked for a summary. `/compact` was measured taking a two-run transcript from 2440 to 934 tokens. The automatic 75% trigger has never fired in a real run, so only the manual path is proven.
 - **One tool call per turn.** No parallel calls, no unified-diff edit format (measurably worse for weak models than whole-file writes), no repo map.
 - **Not offline on day one.** Inference is fully local, but the first Editor open downloads 3.77 GiB of native binaries and you then download a ~4.8 GiB model. Offline *after* setup.
 - **Non-English toolchains are on you.** `run_command` is generic and knows nothing about .NET, so a localised compiler reports its errors in the system language. Error *codes* stay English, so the model is not blind, but the explanation is not. Set `DOTNET_CLI_UI_LANGUAGE=en` if you want the model reasoning about the message rather than translating it. Relatedly, command output is decoded as UTF-8 — right for every modern build tool, wrong for old Windows tools like `ping` that still write the console OEM code page.
@@ -298,22 +302,24 @@ That run is also why the budget is 14 round trips rather than 10: it spent nine,
 
 ## Repo layout
 
-42 C# files, about 12 000 lines including comments. The comments carry the reasoning; several files explain what was measured and rejected as well as what shipped.
+54 C# files, about 15 600 lines including comments. The comments carry the reasoning; several files explain what was measured and rejected as well as what shipped.
 
 ```
 Assets/Scripts/
   Agent/
-    Core/      AgentRunner, AgentLoop, AgentEvents, AgentDataTypes
+    Core/      AgentRunner, AgentLoop, AgentEvents, AgentDataTypes, UserQuestionGate
     Llm/       LlmGateway            — the only class that references LLMUnity
-    Prompt/    ChatMlPromptRenderer, PromptBuilder, SystemPromptText
-    Parsing/   ToolCallParser, JsonRepairer, RepeatedCallDetector
+    Prompt/    ChatTemplateRenderer, ChatMlPromptRenderer, PromptBuilder,
+               SystemPromptText, WorkspaceBriefText
+    Parsing/   ToolCallParser, JsonRepairer, RepeatedCallDetector, MarkdownEscapeCleaner
     Grammar/   GbnfGrammarBuilder
-    Tools/     ToolRegistry, ToolRunner, ToolDefinition + 7 executors
+    Tools/     ToolRegistry, ToolRunner, ToolDefinition + 9 executors
     Safety/    PathSandbox, ApprovalGate
     Files/     FileWriteService, LineDiff, FileText
-    Context/   ContextManager, ToolOutputTruncator
+    Context/   ContextManager, ToolOutputTruncator, SessionStore
     Shell/     CommandRunner
-  Ui/          TerminalCliController and 11 views
+  Ui/          TerminalCliController, SlashCommandHandler, ApprovalFlowPresenter
+               and 13 views
 Assets/UI Toolkit/   UXML screens, USS styles, PanelSettings -> render texture
 Assets/Shaders/CRT/  the CRT shader graph and material
 docs/implementation-plan.md   the plan of record: decisions, architecture,
