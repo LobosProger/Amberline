@@ -80,6 +80,22 @@ namespace Amberline.Agent
         /// <summary>The folder every tool is sandboxed to.</summary>
         public string WorkspaceFolderPath => _workspaceFolderPath;
 
+        // Forwarded rather than exposed. The terminal subscribes to AgentEvents and nothing else,
+        // so the backend stays a detail of this layer even when it is the thing being measured.
+        void OnEnable()
+        {
+            if (_llmGateway == null) return;
+
+            _llmGateway.OnGenerationStatsProduced += _agentEvents.RaiseGenerationStatsProduced;
+        }
+
+        void OnDisable()
+        {
+            if (_llmGateway == null) return;
+
+            _llmGateway.OnGenerationStatsProduced -= _agentEvents.RaiseGenerationStatsProduced;
+        }
+
         void Awake()
         {
             _sessionStore = new SessionStore();

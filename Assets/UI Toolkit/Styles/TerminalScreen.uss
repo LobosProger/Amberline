@@ -191,6 +191,15 @@
     opacity: 0.55;
 }
 
+.status-bar__speed {
+    font-size: 18px;
+    color: var(--accent-amber);
+    -unity-text-align: middle-right;
+    -unity-font-style: bold;
+    opacity: 0.4;
+    margin-right: 18px;
+}
+
 .status-bar__user-info {
     font-size: 18px;
     color: var(--accent-amber);

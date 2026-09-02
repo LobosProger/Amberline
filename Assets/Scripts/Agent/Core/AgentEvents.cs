@@ -91,6 +91,18 @@ namespace Amberline.Agent
             OnCommandOutputLineProduced?.Invoke(outputLine);
         }
 
+        /// <summary>
+        /// How fast the model is answering right now. Raised about four times a second while a pass
+        /// is generating, always on the main thread. Every figure in it is measured by the gateway
+        /// rather than reported by the backend - see <see cref="LlmGenerationStats"/>.
+        /// </summary>
+        public event Action<LlmGenerationStats> OnGenerationStatsProduced;
+
+        public void RaiseGenerationStatsProduced(LlmGenerationStats generationStats)
+        {
+            OnGenerationStatsProduced?.Invoke(generationStats);
+        }
+
         public void RaiseNoticeProduced(string noticeText)
         {
             OnNoticeProduced?.Invoke(noticeText);

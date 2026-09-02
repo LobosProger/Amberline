@@ -73,12 +73,31 @@ namespace Amberline.Agent
 		[Tooltip("Safety valve only. Teardown waits for the native call to actually finish; this is the point at which it gives up and unloads anyway.")]
 		[SerializeField] float _secondsToWaitForNativeCallOnShutdown = 180f;
 
+		/// <summary>
+		/// How fast the model is generating, raised about four times a second while a pass runs and
+		/// once more when it ends. Always on the main thread.
+		/// </summary>
+		public event Action<LlmGenerationStats> OnGenerationStatsProduced;
+
 		Task<string> _inFlightCompletionTask;
 		bool _isCompletionInProgress;
 		bool _isModelReady;
 		bool _isShuttingDown;
 		string _stopTextForCurrentCall = "";
 		string _lastForwardedText;
+
+		// The speedometer's working state, all of it main-thread only.
+		float _secondsToFirstTokenOfThisCall;
+		long _millisecondsAtLastSpeedReport;
+		float _charactersPerTokenOfThisCall = k_startingCharactersPerToken;
+		string _textGeneratedInTheLastCall;
+		int _charactersGeneratedInTheLastCall;
+
+		// Two ratios, because the two passes write very different text: the think pass writes prose,
+		// the act pass writes JSON carrying escaped source, and a single ratio would sit wrong for
+		// both. Which one applies is decided by whether a grammar was set for the call.
+		float _charactersPerTokenOfAnUnconstrainedCall = k_startingCharactersPerToken;
+		float _charactersPerTokenOfAConstrainedCall = k_startingCharactersPerToken;
 
 		// Written on the generation thread, read on the main thread, so both need a memory barrier.
 		volatile string _latestCumulativeText = "";
@@ -93,6 +112,18 @@ namespace Amberline.Agent
 		const int k_framesBetweenReadinessProbes = 2;
 		const int k_readinessProbeAttempts = 3;
 		const string k_readinessProbeText = "ready";
+
+		// Four updates a second. The streaming loop itself ticks every 33 ms, which is far more often
+		// than a number on screen can be read, and a label rewritten thirty times a second is a blur.
+		const int k_millisecondsBetweenSpeedReports = 250;
+
+		// English prose averages about four characters per token, the same assumption ContextManager
+		// starts from. It is only the value used before the first calibration lands.
+		const float k_startingCharactersPerToken = 4f;
+
+		// Nothing real sits outside this band, so one bad measurement cannot make the figure absurd.
+		const float k_smallestSensibleCharactersPerToken = 2f;
+		const float k_largestSensibleCharactersPerToken = 6f;
 
 		// Every native build whose name says it offloads to a GPU. Anything else is CPU only.
 		static readonly string[] k_namesOfNativeBuildsThatUseTheGpu = { "cublas", "tinyblas", "vulkan", "metal", "hip", "sycl" };
@@ -215,15 +246,30 @@ namespace Amberline.Agent
 			}
 
 			_isCompletionInProgress = true;
+			bool isThisCallConstrainedByAGrammar = !string.IsNullOrEmpty(grammar);
+			_charactersPerTokenOfThisCall = isThisCallConstrainedByAGrammar
+				? _charactersPerTokenOfAConstrainedCall
+				: _charactersPerTokenOfAnUnconstrainedCall;
+
+			LlmCompletionResult completionResult;
 
 			try
 			{
-				return await RunOneCompletionAsync(prompt, onPartialText, sampling, grammar, stopText, cancellationToken);
+				completionResult = await RunOneCompletionAsync(prompt, onPartialText, sampling, grammar, stopText, cancellationToken);
 			}
 			finally
 			{
 				_isCompletionInProgress = false;
 			}
+
+			// Calibration happens HERE and nowhere else. It calls the tokenizer, which refuses and
+			// answers zero while a completion holds the single slot, so anywhere inside
+			// RunOneCompletionAsync it would silently measure nothing. By this line the flag is
+			// clear and that method's own finally has already put the grammar and the sampling back.
+			_textGeneratedInTheLastCall = completionResult.Text;
+			await CalibrateCharactersPerTokenAsync(isThisCallConstrainedByAGrammar);
+
+			return completionResult;
 		}
 
 		/// <summary>
@@ -556,6 +602,11 @@ namespace Amberline.Agent
 			_wasCancellationRequestedByCaller = false;
 			_wasStopTextReached = false;
 			_stopTextForCurrentCall = stopText ?? "";
+
+			_secondsToFirstTokenOfThisCall = 0f;
+			_millisecondsAtLastSpeedReport = 0;
+			_textGeneratedInTheLastCall = null;
+			_charactersGeneratedInTheLastCall = 0;
 		}
 
 		LlmSamplingOverride CaptureCurrentSampling()
@@ -631,6 +682,8 @@ namespace Amberline.Agent
 
 		async UniTask<LlmCompletionResult> StreamCompletionUntilFinishedAsync(string prompt, Action<string> onPartialText, CancellationToken cancellationToken)
 		{
+			var stopwatchOfThisCall = Stopwatch.StartNew();
+
 			// Kept in a local as well as in the field: teardown clears the field the moment it has
 			// drained the call, and this loop still has to reach its own end cleanly.
 			Task<string> completionTask = Task.Run(() => _llmClient.Completion(prompt, HandleRawPartialTextFromGenerationThread, null, k_completionSlotId));
@@ -645,11 +698,95 @@ namespace Amberline.Agent
 					CancelActiveCompletion();
 				}
 
+				// This loop runs on the main thread - UniTask.Delay resumes on the player loop
+				// whatever thread the generation itself is on - so both of these may touch the UI.
 				ForwardTextToListener(onPartialText, _latestCumulativeText);
+				ReportGenerationSpeed(stopwatchOfThisCall, _latestCumulativeText);
 			}
 
 			string generatedText = await completionTask.AsUniTask();
+
+			_charactersGeneratedInTheLastCall = (generatedText ?? "").Length;
+			ReportGenerationSpeed(stopwatchOfThisCall, generatedText, isTheLastReportOfTheCall: true);
+
 			return BuildResultFromGeneratedText(generatedText, onPartialText);
+		}
+
+		// Everything about the speed figure is worked out here, because nothing downstream can work
+		// it out for itself: see LlmGenerationStats for why the backend reports no timings at all.
+		//
+		// The clock for tokens per second starts at the FIRST TOKEN, not at the call. The act pass
+		// runs on a prompt that is a byte-exact extension of the think pass's, so llama.cpp reuses
+		// the KV cache and its prefill is nearly free - folding that into the same number would read
+		// as the model having suddenly got ten times faster. Prefill gets its own figure instead,
+		// and that figure is the one that shows a model spilling out of VRAM.
+		void ReportGenerationSpeed(Stopwatch stopwatchOfThisCall, string cumulativeText, bool isTheLastReportOfTheCall = false)
+		{
+			if (OnGenerationStatsProduced == null) return;
+			if (string.IsNullOrEmpty(cumulativeText)) return;
+
+			if (_secondsToFirstTokenOfThisCall <= 0f)
+			{
+				_secondsToFirstTokenOfThisCall = (float)stopwatchOfThisCall.Elapsed.TotalSeconds;
+			}
+
+			if (!isTheLastReportOfTheCall &&
+				stopwatchOfThisCall.ElapsedMilliseconds - _millisecondsAtLastSpeedReport < k_millisecondsBetweenSpeedReports)
+			{
+				return;
+			}
+
+			_millisecondsAtLastSpeedReport = stopwatchOfThisCall.ElapsedMilliseconds;
+
+			int tokensGenerated = Mathf.Max(1, Mathf.RoundToInt(cumulativeText.Length / _charactersPerTokenOfThisCall));
+			float secondsSpentDecoding = (float)stopwatchOfThisCall.Elapsed.TotalSeconds - _secondsToFirstTokenOfThisCall;
+			float tokensPerSecond = secondsSpentDecoding > 0f ? tokensGenerated / secondsSpentDecoding : 0f;
+
+			RaiseGenerationStats(new LlmGenerationStats(tokensGenerated, tokensPerSecond, _secondsToFirstTokenOfThisCall));
+		}
+
+		// Wrapped, and it has to be. AgentEvents deliberately does not guard its subscribers, and an
+		// exception raised from in here would be caught by RunOneCompletionAsync and turned into a
+		// failed completion - a run killed by a status bar. Worse, that catch runs the finally that
+		// clears _inFlightCompletionTask, so the shutdown drain would stop waiting on a native call
+		// that is still running, and the model could be unloaded from under it.
+		void RaiseGenerationStats(LlmGenerationStats generationStats)
+		{
+			try
+			{
+				OnGenerationStatsProduced?.Invoke(generationStats);
+			}
+			catch (Exception exception)
+			{
+				Debug.LogError($"[LlmGateway] A generation-stats listener threw, and it was swallowed so the run survives: {exception}");
+			}
+		}
+
+		// Called once a call is completely over, with the tokenizer free again. Characters per token
+		// is what turns a length into a token count while the text is still arriving, and it differs
+		// sharply between the two passes - prose runs near four, a tool call carrying escaped source
+		// runs far lower - so the two are calibrated apart, keyed on whether a grammar was set.
+		async UniTask CalibrateCharactersPerTokenAsync(bool wasThisCallConstrainedByAGrammar)
+		{
+			if (_charactersGeneratedInTheLastCall <= 0) return;
+			if (_textGeneratedInTheLastCall == null) return;
+
+			int measuredTokenCount = await CountTokensAsync(_textGeneratedInTheLastCall);
+			_textGeneratedInTheLastCall = null;
+
+			if (measuredTokenCount <= 0) return;
+
+			float measuredCharactersPerToken = (float)_charactersGeneratedInTheLastCall / measuredTokenCount;
+			float clampedCharactersPerToken = Mathf.Clamp(measuredCharactersPerToken,
+				k_smallestSensibleCharactersPerToken, k_largestSensibleCharactersPerToken);
+
+			if (wasThisCallConstrainedByAGrammar)
+			{
+				_charactersPerTokenOfAConstrainedCall = clampedCharactersPerToken;
+				return;
+			}
+
+			_charactersPerTokenOfAnUnconstrainedCall = clampedCharactersPerToken;
 		}
 
 		void HandleRawPartialTextFromGenerationThread(string cumulativeText)

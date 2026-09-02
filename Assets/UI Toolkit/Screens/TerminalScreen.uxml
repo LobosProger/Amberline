@@ -15,6 +15,7 @@
         <ui:VisualElement class="status-bar terminal-chrome">
             <ui:Label name="status-bar__workspace" text="workspace: none" class="status-bar__user-info"/>
             <ui:VisualElement style="flex-grow: 1;"/>
+            <ui:Label name="status-bar__speed" text="" class="status-bar__speed"/>
             <ui:Label name="status-bar__state" text="idle" class="status-bar__version"/>
         </ui:VisualElement>
     </ui:VisualElement>

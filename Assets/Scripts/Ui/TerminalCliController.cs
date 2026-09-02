@@ -111,6 +111,9 @@ namespace Amberline.Ui
 
         const int k_maximumCharactersOfACommandOutputLineOnScreen = 200;
 
+        // Under this the prefill was served from the cache and saying so tells nobody anything.
+        const float k_shortestPrefillWorthNaming = 0.5f;
+
         const string k_workspaceFolderPathPreferenceKey = "amberline.workspaceFolderPath";
 
         void Awake()
@@ -190,6 +193,7 @@ namespace Amberline.Ui
             _agentRunner.Events.OnToolResultProduced += HandleToolResultProduced;
             _agentRunner.Events.OnCommandOutputLineProduced += HandleCommandOutputLineProduced;
             _agentRunner.Events.OnNoticeProduced += HandleNoticeProduced;
+            _agentRunner.Events.OnGenerationStatsProduced += HandleGenerationStatsProduced;
             _agentRunner.Events.OnRunFinished += HandleRunFinished;
         }
 
@@ -204,6 +208,7 @@ namespace Amberline.Ui
             _agentRunner.Events.OnToolResultProduced -= HandleToolResultProduced;
             _agentRunner.Events.OnCommandOutputLineProduced -= HandleCommandOutputLineProduced;
             _agentRunner.Events.OnNoticeProduced -= HandleNoticeProduced;
+            _agentRunner.Events.OnGenerationStatsProduced -= HandleGenerationStatsProduced;
             _agentRunner.Events.OnRunFinished -= HandleRunFinished;
         }
 
@@ -469,6 +474,12 @@ namespace Amberline.Ui
         public void PrepareScreenForClearing()
         {
             FinishTheThoughtAndTheRunningToolCard();
+
+            // The speed reading outlives a pass on purpose, so it survives every other way a run
+            // ends. /clear is the one place it should not: it is a reading of a conversation that
+            // no longer exists.
+            if (_statusBarView != null)
+                _statusBarView.SetGenerationSpeed(string.Empty);
         }
 
         async UniTask RunAgentTurnAsync(string submittedCommand, CancellationToken cancellationToken)
@@ -635,6 +646,28 @@ namespace Amberline.Ui
                 TerminalLineKind.ToolActivity);
 
             _firstAnswerTextSignal?.TrySetResult(true);
+        }
+
+        // The speedometer, live while a pass generates. It stays on screen after the pass ends: a
+        // reading of one token a second next to an idle terminal is exactly the thing worth seeing,
+        // because it is what a model that has spilled out of VRAM into system memory looks like.
+        //
+        // Both numbers are measured by the gateway rather than reported by the backend, which
+        // reports nothing at all - see LlmGenerationStats.
+        void HandleGenerationStatsProduced(LlmGenerationStats generationStats)
+        {
+            if (_statusBarView == null) return;
+
+            string speedText = $"{generationStats.TokensPerSecond:0.#} tok/s";
+
+            // Only worth showing once it is long enough to notice. Below that the prefill was
+            // cached, and a "0s" beside every pass is noise.
+            if (generationStats.SecondsToFirstToken >= k_shortestPrefillWorthNaming)
+            {
+                speedText += $"  prefill {generationStats.SecondsToFirstToken:0.#}s";
+            }
+
+            _statusBarView.SetGenerationSpeed(speedText);
         }
 
         // Something the loop did on its own account - today, compacting the transcript. Shown so a

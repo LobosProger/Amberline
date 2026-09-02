@@ -81,6 +81,43 @@ namespace Amberline.Agent
     }
 
     /// <summary>
+    /// How fast the model is answering right now. Raised while a pass is generating, so the number
+    /// on screen is live rather than a report after the fact.
+    /// </summary>
+    /// <remarks>
+    /// EVERY FIGURE HERE IS MEASURED BY US, not reported by the backend. LLM for Unity returns the
+    /// generated string and nothing else: its own response DTO declares two fields, prompt and
+    /// content, the native flag that would return anything richer is not exposed in managed code,
+    /// and the word "timings" does not appear anywhere in the package. llama.cpp's own numbers
+    /// exist only as lines in the native log.
+    /// <para>
+    /// So the token count is an estimate: characters divided by a ratio the gateway calibrates
+    /// against the real tokenizer after each pass. Treat it as a speedometer, which is what it is
+    /// for - a prefill that has spilled out of VRAM into system memory shows up here as an order of
+    /// magnitude, long before anything else in the product says a word about it.
+    /// </para>
+    /// </remarks>
+    public readonly struct LlmGenerationStats
+    {
+        /// <summary>Estimated tokens generated so far in this pass.</summary>
+        public int TokensGenerated { get; }
+
+        /// <summary>Estimated tokens per second, counted from the first token rather than from the
+        /// start of the call - mixing prefill into this makes two passes incomparable.</summary>
+        public float TokensPerSecond { get; }
+
+        /// <summary>Seconds spent before the first token appeared: the price of the prefill.</summary>
+        public float SecondsToFirstToken { get; }
+
+        public LlmGenerationStats(int tokensGenerated, float tokensPerSecond, float secondsToFirstToken)
+        {
+            TokensGenerated = tokensGenerated;
+            TokensPerSecond = tokensPerSecond;
+            SecondsToFirstToken = secondsToFirstToken;
+        }
+    }
+
+    /// <summary>
     /// Outcome of one call to the model. Failure and cancellation are values rather than
     /// exceptions, because both are ordinary things for an agent turn to end with and the loop
     /// has to keep running afterwards either way.
