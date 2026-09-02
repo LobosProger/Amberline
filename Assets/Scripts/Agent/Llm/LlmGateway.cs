@@ -86,20 +86,12 @@ namespace Amberline.Agent
 		string _stopTextForCurrentCall = "";
 		string _lastForwardedText;
 
-		// The speedometer's working state, all of it main-thread only.
+		// The speedometer's working state. Only the token count is written off the main thread.
 		float _secondsToFirstTokenOfThisCall;
 		long _millisecondsAtLastSpeedReport;
-		float _charactersPerTokenOfThisCall = k_startingCharactersPerToken;
-		string _textGeneratedInTheLastCall;
-		int _charactersGeneratedInTheLastCall;
-
-		// Two ratios, because the two passes write very different text: the think pass writes prose,
-		// the act pass writes JSON carrying escaped source, and a single ratio would sit wrong for
-		// both. Which one applies is decided by whether a grammar was set for the call.
-		float _charactersPerTokenOfAnUnconstrainedCall = k_startingCharactersPerToken;
-		float _charactersPerTokenOfAConstrainedCall = k_startingCharactersPerToken;
 
 		// Written on the generation thread, read on the main thread, so both need a memory barrier.
+		volatile int _tokensGeneratedInThisCall;
 		volatile string _latestCumulativeText = "";
 		volatile bool _wasCancellationRequestedByCaller;
 		volatile bool _wasStopTextReached;
@@ -116,14 +108,6 @@ namespace Amberline.Agent
 		// Four updates a second. The streaming loop itself ticks every 33 ms, which is far more often
 		// than a number on screen can be read, and a label rewritten thirty times a second is a blur.
 		const int k_millisecondsBetweenSpeedReports = 250;
-
-		// English prose averages about four characters per token, the same assumption ContextManager
-		// starts from. It is only the value used before the first calibration lands.
-		const float k_startingCharactersPerToken = 4f;
-
-		// Nothing real sits outside this band, so one bad measurement cannot make the figure absurd.
-		const float k_smallestSensibleCharactersPerToken = 2f;
-		const float k_largestSensibleCharactersPerToken = 6f;
 
 		// Every native build whose name says it offloads to a GPU. Anything else is CPU only.
 		static readonly string[] k_namesOfNativeBuildsThatUseTheGpu = { "cublas", "tinyblas", "vulkan", "metal", "hip", "sycl" };
@@ -246,30 +230,15 @@ namespace Amberline.Agent
 			}
 
 			_isCompletionInProgress = true;
-			bool isThisCallConstrainedByAGrammar = !string.IsNullOrEmpty(grammar);
-			_charactersPerTokenOfThisCall = isThisCallConstrainedByAGrammar
-				? _charactersPerTokenOfAConstrainedCall
-				: _charactersPerTokenOfAnUnconstrainedCall;
-
-			LlmCompletionResult completionResult;
 
 			try
 			{
-				completionResult = await RunOneCompletionAsync(prompt, onPartialText, sampling, grammar, stopText, cancellationToken);
+				return await RunOneCompletionAsync(prompt, onPartialText, sampling, grammar, stopText, cancellationToken);
 			}
 			finally
 			{
 				_isCompletionInProgress = false;
 			}
-
-			// Calibration happens HERE and nowhere else. It calls the tokenizer, which refuses and
-			// answers zero while a completion holds the single slot, so anywhere inside
-			// RunOneCompletionAsync it would silently measure nothing. By this line the flag is
-			// clear and that method's own finally has already put the grammar and the sampling back.
-			_textGeneratedInTheLastCall = completionResult.Text;
-			await CalibrateCharactersPerTokenAsync(isThisCallConstrainedByAGrammar);
-
-			return completionResult;
 		}
 
 		/// <summary>
@@ -605,8 +574,7 @@ namespace Amberline.Agent
 
 			_secondsToFirstTokenOfThisCall = 0f;
 			_millisecondsAtLastSpeedReport = 0;
-			_textGeneratedInTheLastCall = null;
-			_charactersGeneratedInTheLastCall = 0;
+			_tokensGeneratedInThisCall = 0;
 		}
 
 		LlmSamplingOverride CaptureCurrentSampling()
@@ -706,7 +674,6 @@ namespace Amberline.Agent
 
 			string generatedText = await completionTask.AsUniTask();
 
-			_charactersGeneratedInTheLastCall = (generatedText ?? "").Length;
 			ReportGenerationSpeed(stopwatchOfThisCall, generatedText, isTheLastReportOfTheCall: true);
 
 			return BuildResultFromGeneratedText(generatedText, onPartialText);
@@ -714,6 +681,12 @@ namespace Amberline.Agent
 
 		// Everything about the speed figure is worked out here, because nothing downstream can work
 		// it out for itself: see LlmGenerationStats for why the backend reports no timings at all.
+		//
+		// THE TOKEN COUNT IS EXACT rather than estimated. The native layer calls the streaming
+		// callback once per token, so counting those calls counts the tokens. It WAS an estimate -
+		// characters over a calibrated characters-per-token ratio - and a live measurement caught
+		// that reading 36% high: one ratio cannot describe both a six-word thought and six sentences
+		// of prose. Counting the callback needs no calibration and no tokenizer call at all.
 		//
 		// The clock for tokens per second starts at the FIRST TOKEN, not at the call. The act pass
 		// runs on a prompt that is a byte-exact extension of the think pass's, so llama.cpp reuses
@@ -738,7 +711,7 @@ namespace Amberline.Agent
 
 			_millisecondsAtLastSpeedReport = stopwatchOfThisCall.ElapsedMilliseconds;
 
-			int tokensGenerated = Mathf.Max(1, Mathf.RoundToInt(cumulativeText.Length / _charactersPerTokenOfThisCall));
+			int tokensGenerated = _tokensGeneratedInThisCall;
 			float secondsSpentDecoding = (float)stopwatchOfThisCall.Elapsed.TotalSeconds - _secondsToFirstTokenOfThisCall;
 			float tokensPerSecond = secondsSpentDecoding > 0f ? tokensGenerated / secondsSpentDecoding : 0f;
 
@@ -762,38 +735,14 @@ namespace Amberline.Agent
 			}
 		}
 
-		// Called once a call is completely over, with the tokenizer free again. Characters per token
-		// is what turns a length into a token count while the text is still arriving, and it differs
-		// sharply between the two passes - prose runs near four, a tool call carrying escaped source
-		// runs far lower - so the two are calibrated apart, keyed on whether a grammar was set.
-		async UniTask CalibrateCharactersPerTokenAsync(bool wasThisCallConstrainedByAGrammar)
-		{
-			if (_charactersGeneratedInTheLastCall <= 0) return;
-			if (_textGeneratedInTheLastCall == null) return;
-
-			int measuredTokenCount = await CountTokensAsync(_textGeneratedInTheLastCall);
-			_textGeneratedInTheLastCall = null;
-
-			if (measuredTokenCount <= 0) return;
-
-			float measuredCharactersPerToken = (float)_charactersGeneratedInTheLastCall / measuredTokenCount;
-			float clampedCharactersPerToken = Mathf.Clamp(measuredCharactersPerToken,
-				k_smallestSensibleCharactersPerToken, k_largestSensibleCharactersPerToken);
-
-			if (wasThisCallConstrainedByAGrammar)
-			{
-				_charactersPerTokenOfAConstrainedCall = clampedCharactersPerToken;
-				return;
-			}
-
-			_charactersPerTokenOfAnUnconstrainedCall = clampedCharactersPerToken;
-		}
-
 		void HandleRawPartialTextFromGenerationThread(string cumulativeText)
 		{
 			// This runs on the thread the native library generates on, so nothing here may touch the
 			// Unity API. It buffers the text and, at most, makes one more native call.
 			_latestCumulativeText = cumulativeText ?? "";
+
+			// One call per token, which is what makes the speed figure exact.
+			_tokensGeneratedInThisCall++;
 
 			if (_wasStopTextReached || string.IsNullOrEmpty(_stopTextForCurrentCall))
 			{

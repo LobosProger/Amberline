@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Threading;
 using Amberline.Agent;
@@ -658,13 +659,17 @@ namespace Amberline.Ui
         {
             if (_statusBarView == null) return;
 
-            string speedText = $"{generationStats.TokensPerSecond:0.#} tok/s";
+            // Invariant culture, deliberately. Every other word in this terminal is English, and a
+            // machine set to a comma-decimal locale rendered "36,1 tok/s", which reads as a
+            // thousands separator next to monospaced English.
+            string speedText = generationStats.TokensPerSecond.ToString("0.#", CultureInfo.InvariantCulture) + " tok/s";
 
             // Only worth showing once it is long enough to notice. Below that the prefill was
             // cached, and a "0s" beside every pass is noise.
             if (generationStats.SecondsToFirstToken >= k_shortestPrefillWorthNaming)
             {
-                speedText += $"  prefill {generationStats.SecondsToFirstToken:0.#}s";
+                speedText += "  prefill " +
+                             generationStats.SecondsToFirstToken.ToString("0.#", CultureInfo.InvariantCulture) + "s";
             }
 
             _statusBarView.SetGenerationSpeed(speedText);

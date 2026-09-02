@@ -59,7 +59,10 @@ namespace Amberline.Agent
         // time (rather than patching the newest user turn at render time) keeps the transcript
         // append-only, which rule 1 above depends on. The price is that the marker repeats inside
         // a merged user turn - a few tokens, paid to never rewrite a turn.
-        const string k_noThinkMarker = "/no_think";
+        /// <summary>The reasoning marker appended to every user turn for a model that has
+        /// reasoning tokens. Public so the terminal can strip it back out of anything it shows
+        /// the person - it is machinery, and it is not something they typed.</summary>
+        public const string k_noThinkMarker = "/no_think";
 
         // Long enough to name a path, short enough that the stand-in stays one line.
         const int k_maximumArgumentCharactersInATrimmedLine = 80;

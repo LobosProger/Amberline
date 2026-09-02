@@ -323,10 +323,18 @@ namespace Amberline.Agent
                 if (message.Role != ChatRole.User) continue;
                 if (message.Text.Contains("<tool_response>")) continue;
 
-                return message.Text;
+                return RemoveTheMarkersMeantOnlyForTheModel(message.Text);
             }
 
             return string.Empty;
+        }
+
+        // Every user turn carries machinery the model needs and a person never should: the
+        // reasoning marker is appended to each one. Shown verbatim, /resume read back
+        // "your task /no_think", which looks like the user typed it.
+        static string RemoveTheMarkersMeantOnlyForTheModel(string userTurnText)
+        {
+            return userTurnText.Replace(PromptBuilder.k_noThinkMarker, string.Empty).Trim();
         }
 
         /// <summary>How full the model's context window is right now, for the status bar.</summary>
