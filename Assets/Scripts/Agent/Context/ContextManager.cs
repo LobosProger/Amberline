@@ -143,6 +143,30 @@ namespace Amberline.Agent
         }
 
         /// <summary>
+        /// Replaces the conversation with one read back from disk, leaving the pinned system block
+        /// exactly as it is. Backs /resume.
+        /// </summary>
+        /// <remarks>
+        /// The token counts come with the messages rather than being measured again. That is the
+        /// same principle the transcript already runs on - counted once, at insertion - and
+        /// re-measuring would mean one blocking native call per message on the main thread.
+        /// </remarks>
+        public void RestoreMessages(IReadOnlyList<ChatMessage> restoredMessages)
+        {
+            Clear();
+
+            if (restoredMessages == null) return;
+
+            foreach (var message in restoredMessages)
+            {
+                if (message == null || message.Role == ChatRole.System) continue;
+                if (string.IsNullOrWhiteSpace(message.Text)) continue;
+
+                _messages.Add(message);
+            }
+        }
+
+        /// <summary>
         /// Cuts the older tool outputs down to their one-line stand-ins and returns how many tokens
         /// that freed. The cheap half of making room: nothing is summarised, nothing is reworded,
         /// and the model can call the tool again if it turns out to still need what was dropped.

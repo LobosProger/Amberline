@@ -32,8 +32,10 @@ namespace Amberline.Ui
         // and an offered command that falls through to the default reads as a bug.
         static readonly string[] k_slashCommands =
         {
-            "/help", "/cwd", "/cd", "/context", "/tools", "/approve-mode", "/compact", "/undo", "/clear", "/exit"
+            "/help", "/cwd", "/cd", "/context", "/tools", "/approve-mode", "/compact", "/resume", "/undo", "/clear", "/exit"
         };
+
+        const int k_maximumCharactersOfARestoredTaskOnScreen = 120;
 
         public SlashCommandHandler(TerminalView terminalView, AgentRunner agentRunner, ITerminalCommandHost host)
         {
@@ -87,6 +89,10 @@ namespace Amberline.Ui
                     await CompactConversationAsync();
                     return true;
 
+                case "/resume":
+                    ResumeSavedConversation();
+                    return true;
+
                 case "/undo":
                     UndoLastFileChange();
                     return true;
@@ -113,7 +119,8 @@ namespace Amberline.Ui
             _terminalView.AppendLineInstant("/context  show how much of the model's context window is used", TerminalLineKind.Notice);
             _terminalView.AppendLineInstant("/tools    show the tools the agent can call right now", TerminalLineKind.Notice);
             _terminalView.AppendLineInstant("/approve-mode  switch between asking about every edit and letting edits through", TerminalLineKind.Notice);
-            _terminalView.AppendLineInstant("/compact  summarise the older part of the conversation to free up context", TerminalLineKind.Notice);
+            _terminalView.AppendLineInstant("/compact  free up context: drop old tool output, then summarise the rest", TerminalLineKind.Notice);
+            _terminalView.AppendLineInstant("/resume   put back the conversation from the last session in this folder", TerminalLineKind.Notice);
             _terminalView.AppendLineInstant("/undo     put the last file change the agent made back the way it was", TerminalLineKind.Notice);
             _terminalView.AppendLineInstant("/clear    clear the screen and forget the conversation", TerminalLineKind.Notice);
             _terminalView.AppendLineInstant("/exit     quit", TerminalLineKind.Notice);
@@ -292,6 +299,46 @@ namespace Amberline.Ui
             }
 
             ShowContextUsage();
+        }
+
+        // The conversation is saved after every run, but never restored on its own: an agent that
+        // silently remembers a conversation the user has forgotten is worse than one that starts
+        // clean. So this is a command, and it says what it put back.
+        void ResumeSavedConversation()
+        {
+            if (_agentRunner == null)
+            {
+                _terminalView.AppendLineInstant("no agent is wired up, so there is no session to resume.", TerminalLineKind.Error);
+                return;
+            }
+
+            if (!_agentRunner.TryResumeSavedConversation(out int amountOfMessagesRestored, out string failureReason))
+            {
+                _terminalView.AppendLineInstant($"resume: {failureReason}", TerminalLineKind.Notice);
+                return;
+            }
+
+            _terminalView.AppendLineInstant($"resume: {amountOfMessagesRestored} messages are back in the conversation.", TerminalLineKind.Notice);
+
+            string latestUserTaskText = _agentRunner.FindLatestUserTaskText();
+
+            if (!string.IsNullOrWhiteSpace(latestUserTaskText))
+            {
+                _terminalView.AppendLineInstant($"  the last thing you asked for was: {ShortenForOneLine(latestUserTaskText)}", TerminalLineKind.Notice);
+            }
+
+            _terminalView.AppendLineInstant("every approval from that session was NOT restored - a write will be asked about again.", TerminalLineKind.Notice);
+
+            ShowContextUsage();
+        }
+
+        static string ShortenForOneLine(string text)
+        {
+            string singleLineText = text.Replace('\n', ' ').Replace('\r', ' ').Trim();
+
+            return singleLineText.Length <= k_maximumCharactersOfARestoredTaskOnScreen
+                ? singleLineText
+                : singleLineText.Substring(0, k_maximumCharactersOfARestoredTaskOnScreen) + "...";
         }
 
         // One change per call, the most recent first. A user who wants two changes gone types it

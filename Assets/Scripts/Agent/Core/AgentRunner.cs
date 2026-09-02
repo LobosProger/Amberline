@@ -37,6 +37,10 @@ namespace Amberline.Agent
         ToolRunner _toolRunner;
         AgentLoop _agentLoop;
 
+        // Built in Awake because it reads Application.persistentDataPath, which only answers on
+        // the main thread.
+        SessionStore _sessionStore;
+
         // Held by name because the per-run question limit has to be reset when a run starts,
         // and the registry only ever hands executors back as the interface.
         AskUserTool _askUserTool;
@@ -78,6 +82,7 @@ namespace Amberline.Agent
 
         void Awake()
         {
+            _sessionStore = new SessionStore();
             _contextManager = new ContextManager(BuildTokenCounterFromTheModel());
             _chatTemplateRenderer = new ChatTemplateRenderer(BuildChatTemplateApplierFromTheModel());
             BuildToolStackForWorkspaceFolder(ResolveFallbackWorkspaceFolderPath());
@@ -238,6 +243,10 @@ namespace Amberline.Agent
                 // nothing is going to read. The loop reports a cancel as a value rather than
                 // throwing, so this is the one place guaranteed to run however the run ended.
                 _userQuestionGate.CancelPendingQuestion();
+
+                // Saved after every run, including the ones that ended badly. A run stopped
+                // halfway through is exactly the transcript worth not losing.
+                SaveConversationForThisWorkspace();
             }
         }
 
@@ -249,7 +258,59 @@ namespace Amberline.Agent
         /// </summary>
         public async UniTask<bool> CompactConversationAsync(CancellationToken cancellationToken)
         {
-            return await _agentLoop.CompactTranscriptAsync(cancellationToken);
+            bool wasTheConversationRewritten = await _agentLoop.CompactTranscriptAsync(cancellationToken);
+
+            // The saved copy has to follow the rewrite, or /resume would put back the long version
+            // of a conversation the user just paid a generation to shorten.
+            if (wasTheConversationRewritten)
+                SaveConversationForThisWorkspace();
+
+            return wasTheConversationRewritten;
+        }
+
+        void SaveConversationForThisWorkspace()
+        {
+            _sessionStore.Save(_workspaceFolderPath, _contextManager.Messages);
+        }
+
+        /// <summary>
+        /// Backs /resume: puts back the conversation saved for this workspace, leaving the pinned
+        /// system block as it is. False comes with a sentence for the user explaining why.
+        /// </summary>
+        public bool TryResumeSavedConversation(out int amountOfMessagesRestored, out string failureReason)
+        {
+            amountOfMessagesRestored = 0;
+
+            if (!_sessionStore.TryLoad(_workspaceFolderPath, out var restoredMessages, out failureReason))
+                return false;
+
+            _contextManager.RestoreMessages(restoredMessages);
+            amountOfMessagesRestored = restoredMessages.Count;
+
+            // Every approval and every rejection belonged to the session that was interrupted.
+            // Restoring the words is not the same as restoring the permissions.
+            _approvalGate.ForgetApprovalsRememberedForTheSession();
+            _approvalGate.ForgetCallsTheUserRejected();
+
+            return true;
+        }
+
+        /// <summary>The last thing the user asked for in the restored conversation, or empty.</summary>
+        public string FindLatestUserTaskText()
+        {
+            for (int messageIndex = _contextManager.Messages.Count - 1; messageIndex >= 0; messageIndex--)
+            {
+                var message = _contextManager.Messages[messageIndex];
+
+                // Tool results come back as user turns too, so the tag is what tells a real
+                // request from a result the loop fed back in.
+                if (message.Role != ChatRole.User) continue;
+                if (message.Text.Contains("<tool_response>")) continue;
+
+                return message.Text;
+            }
+
+            return string.Empty;
         }
 
         /// <summary>How full the model's context window is right now, for the status bar.</summary>
@@ -307,6 +368,10 @@ namespace Amberline.Agent
             // of every no the user gave: both were answers about work that has been thrown away.
             _approvalGate.ForgetApprovalsRememberedForTheSession();
             _approvalGate.ForgetCallsTheUserRejected();
+
+            // The saved copy goes with it. /clear means starting over, and a /resume that put the
+            // cleared conversation back would make it mean nothing.
+            _sessionStore.Delete(_workspaceFolderPath);
         }
 
         // Pinning measures the prompt with the model's tokenizer, which waits for the model to
