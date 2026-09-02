@@ -18,7 +18,19 @@ namespace Amberline.Ui
     /// <see cref="AgentRunner"/>, and nothing in the agent core knows this namespace exists.
     /// </para>
     /// </summary>
-    public class TerminalCliController : MonoBehaviour
+    /// <remarks>
+    /// Two jobs used to live here and no longer do. <see cref="SlashCommandHandler"/> owns the
+    /// command table, and <see cref="ApprovalFlowPresenter"/> owns the approval card and the diffs.
+    /// Both reach the state that genuinely cannot be cut apart - the turn's cancellation source,
+    /// the resolved workspace path, and the thought block - through
+    /// <see cref="ITerminalCommandHost"/>, which this class implements.
+    /// <para>
+    /// What stayed is what the agent's own events write to: the thought block, the running tool
+    /// card and the spinner signal are all touched by several handlers at once, and separating any
+    /// one of them from the others would only move the coupling somewhere less obvious.
+    /// </para>
+    /// </remarks>
+    public class TerminalCliController : MonoBehaviour, ITerminalCommandHost
     {
         [Header("Views")]
         [SerializeField] TerminalView _terminalView;
@@ -44,6 +56,11 @@ namespace Amberline.Ui
         [Tooltip("Remember the folder /cd was last pointed at and use it again next time Play is pressed. Only used when the field above is empty.")]
         [SerializeField] bool _shouldRememberTheWorkspaceFolderBetweenSessions = true;
 
+        // The two pieces this controller used to be. Built in Awake, because OnEnable subscribes
+        // through one of them and Awake is the only lifecycle step guaranteed to run first.
+        SlashCommandHandler _slashCommandHandler;
+        ApprovalFlowPresenter _approvalFlowPresenter;
+
         string _resolvedWorkspaceFolderPath;
 
         // Cancels whatever the current turn is doing. Replaced at the start of every turn so a
@@ -68,11 +85,6 @@ namespace Amberline.Ui
         // outcome. The spinner waits on it, so it can never keep spinning over visible text.
         UniTaskCompletionSource<bool> _firstAnswerTextSignal;
 
-        // The request a card is being built for right now. The build is asynchronous, so by the time
-        // it finishes the run may already have been cancelled and this request resolved - comparing
-        // against it is what stops a card appearing for a question nobody is waiting on.
-        ApprovalRequest _approvalRequestWaitingForACard;
-
         // What the status bar shows once the current turn is over. A cancelled turn leaves
         // "cancelled" up until the next one, instead of flashing it for a single frame.
         string _stateTextToShowWhenTheTurnEnds = k_idleStateText;
@@ -81,33 +93,28 @@ namespace Amberline.Ui
         const string k_idleStateText = "idle";
         const string k_workingStateText = "working";
         const string k_cancelledStateText = "cancelled";
-        const string k_cancelledNoticeText = "cancelled";
+        const string k_cancelledNoticeText = "cancelled.";
 
-        // A tool result can be a whole file. The log shows the head of it and says how much it is
-        // not showing - the model gets the full text, the user gets a line they can read.
-        const int k_maximumCharactersOfAToolResultOnScreen = 140;
-        const int k_maximumCharactersOfAToolArgumentOnScreen = 90;
+        const int k_maximumCharactersOfAToolArgumentOnScreen = 80;
+        const int k_maximumCharactersOfAToolResultOnScreen = 160;
 
-        // Replaces the spinner frame once the tool is done, so a finished card reads as finished
-        // rather than as one frozen mid-spin.
         const string k_toolCardSuffixWhenItWorked = "  ok";
         const string k_toolCardSuffixWhenItFailed = "  failed";
 
-        // Checked in this order, so grep shows what it searched for rather than the folder it
-        // searched in, and read_file shows the file rather than nothing. "summary" is deliberately
-        // absent: it belongs to finish, whose summary is the answer and is printed on its own.
-        static readonly string[] k_argumentNamesWorthShowingOnACard = { "pattern", "command", "path" };
+        // The one argument worth putting on a tool card, per tool, in the order they are tried.
+        static readonly string[] k_argumentNamesWorthShowingOnACard = { "path", "command", "pattern", "summary" };
 
-        static readonly string[] k_slashCommands =
-            { "/help", "/cwd", "/cd", "/context", "/tools", "/approve-mode", "/compact", "/undo", "/clear", "/exit" };
-
-        const int k_maximumCharactersOfACommandOutputLineOnScreen = 160;
+        const int k_maximumCharactersOfACommandOutputLineOnScreen = 200;
 
         const string k_workspaceFolderPathPreferenceKey = "amberline.workspaceFolderPath";
 
         void Awake()
         {
             _resolvedWorkspaceFolderPath = ResolveWorkspaceFolderPath();
+
+            _slashCommandHandler = new SlashCommandHandler(_terminalView, _agentRunner, this);
+            _approvalFlowPresenter =
+                new ApprovalFlowPresenter(_terminalView, _approvalCardView, _diffView, _agentRunner, this);
         }
 
         // Three sources, in this order: the field in the inspector, the folder /cd was last pointed
@@ -149,7 +156,7 @@ namespace Amberline.Ui
             _commandInputView.OnCancelRequested += OnCancelRequested;
 
             SubscribeToAgentEvents();
-            SubscribeToApprovalEvents();
+            _approvalFlowPresenter.Subscribe();
         }
 
         void OnDisable()
@@ -158,7 +165,7 @@ namespace Amberline.Ui
             _commandInputView.OnCancelRequested -= OnCancelRequested;
 
             UnsubscribeFromAgentEvents();
-            UnsubscribeFromApprovalEvents();
+            _approvalFlowPresenter.Unsubscribe();
 
             CancelCurrentTurn();
         }
@@ -193,27 +200,6 @@ namespace Amberline.Ui
             _agentRunner.Events.OnRunFinished -= HandleRunFinished;
         }
 
-        // Three wires, one round trip: the gate asks, the card answers, and the gate says when the
-        // question is over for any reason - including the user pressing Escape, which no card can
-        // report because no card was answered.
-        void SubscribeToApprovalEvents()
-        {
-            if (_agentRunner == null || _approvalCardView == null) return;
-
-            _agentRunner.ApprovalGate.OnApprovalRequested += HandleApprovalRequested;
-            _agentRunner.ApprovalGate.OnApprovalResolved += HandleApprovalResolved;
-            _approvalCardView.OnApprovalAnswered += HandleApprovalAnswered;
-        }
-
-        void UnsubscribeFromApprovalEvents()
-        {
-            if (_agentRunner == null || _approvalCardView == null) return;
-
-            _agentRunner.ApprovalGate.OnApprovalRequested -= HandleApprovalRequested;
-            _agentRunner.ApprovalGate.OnApprovalResolved -= HandleApprovalResolved;
-            _approvalCardView.OnApprovalAnswered -= HandleApprovalAnswered;
-        }
-
         void Start()
         {
             // The controller owns the workspace decision and the sandbox obeys it, so the folder
@@ -224,7 +210,7 @@ namespace Amberline.Ui
             _topBarView.SetWorkspaceFolderPath(_resolvedWorkspaceFolderPath);
             _statusBarView.SetWorkspacePath(_resolvedWorkspaceFolderPath);
             ShowStateWithContextUsage(k_idleStateText);
-            _commandInputView.SetAvailableCommandsForAutocomplete(k_slashCommands);
+            _commandInputView.SetAvailableCommandsForAutocomplete(_slashCommandHandler.CommandNames);
 
             RunBootSequenceAsync().Forget();
         }
@@ -301,7 +287,7 @@ namespace Amberline.Ui
             {
                 _terminalView.AppendLineInstant($"> {submittedCommand}", TerminalLineKind.UserCommand);
 
-                if (await TryHandleSlashCommandAsync(submittedCommand))
+                if (await _slashCommandHandler.TryHandleAsync(submittedCommand))
                     return;
 
                 await RunAgentTurnAsync(submittedCommand, _currentTurnCancellationSource.Token);
@@ -331,7 +317,7 @@ namespace Amberline.Ui
         // The state word and the context budget share the one label the status bar exposes. The
         // budget is only shown once the model has reported a window - before that it would read
         // "0/0", which looks like a bug rather than a model that is still loading.
-        void ShowStateWithContextUsage(string stateText)
+        public void ShowStateWithContextUsage(string stateText)
         {
             if (_statusBarView == null) return;
 
@@ -355,169 +341,19 @@ namespace Amberline.Ui
         void ReplaceCurrentTurnCancellationSource()
         {
             _currentTurnCancellationSource?.Dispose();
-            _currentTurnCancellationSource = CancellationTokenSource.CreateLinkedTokenSource(this.GetCancellationTokenOnDestroy());
+            _currentTurnCancellationSource = CancellationTokenSource.CreateLinkedTokenSource(
+                this.GetCancellationTokenOnDestroy());
         }
 
-        // Returns true when the input was a slash command and has been fully handled here,
-        // so the caller knows not to hand it to the agent as well.
-        //
-        // Asynchronous for the sake of one command: /compact runs a real generation, and returning
-        // before it finished would unlock the input row over a model call still in flight - and the
-        // next turn would then be refused, because this model has exactly one slot.
-        async UniTask<bool> TryHandleSlashCommandAsync(string submittedCommand)
+        /// <inheritdoc />
+        public string WorkspaceFolderPath => _resolvedWorkspaceFolderPath;
+
+        /// <inheritdoc />
+        public CancellationToken GetCancellationTokenOfCurrentTurn()
         {
-            if (!submittedCommand.StartsWith("/", StringComparison.Ordinal)) return false;
-
-            var commandName = submittedCommand.Split(' ')[0].ToLowerInvariant();
-
-            switch (commandName)
-            {
-                case "/help":
-                    ShowHelp();
-                    return true;
-
-                case "/cwd":
-                    ShowWorkspace();
-                    return true;
-
-                case "/cd":
-                    ChangeWorkspaceFolder(submittedCommand);
-                    return true;
-
-                case "/context":
-                    ShowContextUsage();
-                    return true;
-
-                case "/tools":
-                    ShowCallableTools();
-                    return true;
-
-                case "/approve-mode":
-                    ToggleApprovalMode();
-                    return true;
-
-                case "/compact":
-                    await CompactConversationAsync();
-                    return true;
-
-                case "/undo":
-                    UndoLastFileChange();
-                    return true;
-
-                case "/clear":
-                    ClearScreenAndConversation();
-                    return true;
-
-                case "/exit":
-                    QuitApplication();
-                    return true;
-
-                default:
-                    _terminalView.AppendLineInstant($"unknown command: {commandName}. type /help for the list.", TerminalLineKind.Error);
-                    return true;
-            }
-        }
-
-        void ShowHelp()
-        {
-            _terminalView.AppendLineInstant("/help     show this list", TerminalLineKind.Notice);
-            _terminalView.AppendLineInstant("/cwd      show the workspace the agent is sandboxed to", TerminalLineKind.Notice);
-            _terminalView.AppendLineInstant("/cd <absolute path>  move the agent to another folder - this clears the conversation", TerminalLineKind.Notice);
-            _terminalView.AppendLineInstant("/context  show how much of the model's context window is used", TerminalLineKind.Notice);
-            _terminalView.AppendLineInstant("/tools    show the tools the agent can call right now", TerminalLineKind.Notice);
-            _terminalView.AppendLineInstant("/approve-mode  switch between asking about every edit and letting edits through", TerminalLineKind.Notice);
-            _terminalView.AppendLineInstant("/compact  summarise the older part of the conversation to free up context", TerminalLineKind.Notice);
-            _terminalView.AppendLineInstant("/undo     put the last file change the agent made back the way it was", TerminalLineKind.Notice);
-            _terminalView.AppendLineInstant("/clear    clear the screen and forget the conversation", TerminalLineKind.Notice);
-            _terminalView.AppendLineInstant("/exit     quit", TerminalLineKind.Notice);
-            _terminalView.AppendLineInstant("anything else is sent to the agent. esc cancels a running turn.", TerminalLineKind.Notice);
-        }
-
-        void ShowWorkspace()
-        {
-            _terminalView.AppendLineInstant(_resolvedWorkspaceFolderPath, TerminalLineKind.Notice);
-        }
-
-        // The workspace can be moved mid-session because the agent is not tied to this Unity
-        // project - Unity is only the host, and the folder it works in is the user's to choose.
-        // The path has to be absolute: a relative one would be read against the very folder that
-        // is being replaced, which is the one thing nobody can reason about while typing it.
-        void ChangeWorkspaceFolder(string submittedCommand)
-        {
-            if (_agentRunner == null)
-            {
-                _terminalView.AppendLineInstant("no agent is wired up, so there is no workspace to move.", TerminalLineKind.Error);
-                return;
-            }
-
-            // Belt and braces. A slash command cannot land mid-turn - the input row is locked for
-            // the whole of one - but an open approval card belongs to the sandbox that is about to
-            // be thrown away, and the call behind it is still waiting for an answer.
-            if (_agentRunner.ApprovalGate.IsWaitingForTheUser)
-            {
-                _terminalView.AppendLineInstant("cd: answer the approval card that is open first, or press esc.", TerminalLineKind.Error);
-                return;
-            }
-
-            string requestedFolderPath = ReadArgumentAfterTheCommandName(submittedCommand);
-
-            if (string.IsNullOrEmpty(requestedFolderPath))
-            {
-                _terminalView.AppendLineInstant("cd: usage: /cd <absolute path>", TerminalLineKind.Notice);
-                _terminalView.AppendLineInstant($"the workspace is {_resolvedWorkspaceFolderPath}", TerminalLineKind.Notice);
-                return;
-            }
-
-            if (!TryResolveRequestedWorkspaceFolderPath(requestedFolderPath, out string fullFolderPath, out string failureReason))
-            {
-                _terminalView.AppendLineInstant($"cd: {failureReason}", TerminalLineKind.Error);
-                return;
-            }
-
-            ApplyWorkspaceFolderPath(fullFolderPath);
-        }
-
-        // Everything after the first space, rather than the second token: splitting on spaces would
-        // cut a path like C:\My Folder\src in half. Surrounding quotes come off as well, because a
-        // path with a space in it is exactly when people reach for them.
-        static string ReadArgumentAfterTheCommandName(string submittedCommand)
-        {
-            int firstSpaceIndex = submittedCommand.IndexOf(' ');
-            if (firstSpaceIndex < 0) return string.Empty;
-
-            return submittedCommand.Substring(firstSpaceIndex + 1).Trim().Trim('"').Trim();
-        }
-
-        // Path.GetFullPath throws on genuinely malformed input rather than returning anything, so
-        // the failure is turned into a line the user can read instead of an exception in the log.
-        static bool TryResolveRequestedWorkspaceFolderPath(string requestedFolderPath, out string fullFolderPath, out string failureReason)
-        {
-            fullFolderPath = string.Empty;
-            failureReason = null;
-
-            if (!Path.IsPathRooted(requestedFolderPath))
-            {
-                failureReason = $"{requestedFolderPath} is not an absolute path - it has to start from a drive, like C:\\projects\\my-app";
-                return false;
-            }
-
-            try
-            {
-                fullFolderPath = Path.GetFullPath(requestedFolderPath);
-            }
-            catch (Exception exception)
-            {
-                failureReason = $"{requestedFolderPath} is not a usable path: {exception.Message}";
-                return false;
-            }
-
-            if (!Directory.Exists(fullFolderPath))
-            {
-                failureReason = $"there is no folder at {fullFolderPath}";
-                return false;
-            }
-
-            return true;
+            return _currentTurnCancellationSource == null
+                ? this.GetCancellationTokenOnDestroy()
+                : _currentTurnCancellationSource.Token;
         }
 
         // Everything that was true of the old folder stops being true here. The sandbox moves, every
@@ -525,7 +361,7 @@ namespace Amberline.Ui
         // project the agent can no longer see, and keeping it would have the model confidently name
         // files that are not there. The screen is deliberately NOT cleared - the log is the record of
         // the session, and the line that moved the workspace belongs in it.
-        void ApplyWorkspaceFolderPath(string fullFolderPath)
+        public void ApplyWorkspaceFolderPath(string fullFolderPath)
         {
             if (string.Equals(fullFolderPath, _resolvedWorkspaceFolderPath, StringComparison.OrdinalIgnoreCase))
             {
@@ -560,138 +396,10 @@ namespace Amberline.Ui
             PlayerPrefs.Save();
         }
 
-        void ShowContextUsage()
+        /// <inheritdoc />
+        public void PrepareScreenForClearing()
         {
-            if (_agentRunner == null)
-            {
-                _terminalView.AppendLineInstant("no agent is wired up, so there is no context to report.", TerminalLineKind.Error);
-                return;
-            }
-
-            ContextUsage contextUsage = _agentRunner.GetContextUsage();
-            if (contextUsage.MaxTokens <= 0)
-            {
-                _terminalView.AppendLineInstant($"context: {contextUsage.UsedTokens} tokens used. the model has not reported its window yet.", TerminalLineKind.Notice);
-                return;
-            }
-
-            int fillPercentage = Mathf.RoundToInt(contextUsage.FillRatio * 100f);
-            _terminalView.AppendLineInstant($"context: {contextUsage.UsedTokens} of {contextUsage.MaxTokens} usable tokens ({fillPercentage}% full)", TerminalLineKind.Notice);
-        }
-
-        // Every tool the model can reach, in the order the grammar offers them. What stands between
-        // the model and the file system is the approval card, not this list.
-        void ShowCallableTools()
-        {
-            if (_agentRunner == null)
-            {
-                _terminalView.AppendLineInstant("no agent is wired up, so there are no tools to list.", TerminalLineKind.Error);
-                return;
-            }
-
-            var callableToolNames = _agentRunner.GetNamesOfCallableTools();
-            string toolNamesText = callableToolNames.Count == 0 ? "(none)" : string.Join(", ", callableToolNames);
-
-            _terminalView.AppendLineInstant($"tools ..... {toolNamesText}", TerminalLineKind.Notice);
-            _terminalView.AppendLineInstant($"approval .. {DescribeCurrentPermissionMode()}", TerminalLineKind.Notice);
-        }
-
-        // Two modes, one key. The line about commands is printed every single time rather than
-        // only in the loose mode, because the whole value of this switch is that the user knows
-        // exactly what they just gave up - and commands are the one thing they did not.
-        void ToggleApprovalMode()
-        {
-            if (_agentRunner == null)
-            {
-                _terminalView.AppendLineInstant("no agent is wired up, so there is no approval mode to change.", TerminalLineKind.Error);
-                return;
-            }
-
-            var approvalGate = _agentRunner.ApprovalGate;
-
-            var nextPermissionMode = approvalGate.CurrentPermissionMode == PermissionMode.AskEveryTime
-                ? PermissionMode.AutoApproveEdits
-                : PermissionMode.AskEveryTime;
-
-            approvalGate.SetPermissionMode(nextPermissionMode);
-
-            _terminalView.AppendLineInstant($"approve mode ..... {DescribeCurrentPermissionMode()}", TerminalLineKind.Notice);
-            _terminalView.AppendLineInstant("commands ......... always asked about, in every mode", TerminalLineKind.Notice);
-        }
-
-        string DescribeCurrentPermissionMode()
-        {
-            return _agentRunner.ApprovalGate.CurrentPermissionMode == PermissionMode.AskEveryTime
-                ? "ask every time - every write and every command shows a card"
-                : "auto approve edits - writes inside the workspace go through without a card";
-        }
-
-        // The conversation is folded down while the user waits, because it is a real generation.
-        // Nothing is half rewritten: either the summary replaces the older messages or nothing
-        // changes at all, and the context line afterwards is the proof of which happened.
-        async UniTask CompactConversationAsync()
-        {
-            if (_agentRunner == null)
-            {
-                _terminalView.AppendLineInstant("no agent is wired up, so there is nothing to compact.", TerminalLineKind.Error);
-                return;
-            }
-
-            _terminalView.AppendLineInstant("compacting the older part of the conversation...", TerminalLineKind.Notice);
-
-            bool wasTheConversationRewritten =
-                await _agentRunner.CompactConversationAsync(GetCancellationTokenOfCurrentTurn());
-
-            if (!wasTheConversationRewritten)
-            {
-                _terminalView.AppendLineInstant("compact: nothing was changed - the conversation is short enough, or the summary came back empty.",
-                    TerminalLineKind.Notice);
-                return;
-            }
-
-            ShowContextUsage();
-        }
-
-        // One change per call, the most recent first. A user who wants two changes gone types it
-        // twice, which is also the only way they can see what each step put back.
-        void UndoLastFileChange()
-        {
-            if (_agentRunner == null)
-            {
-                _terminalView.AppendLineInstant("no agent is wired up, so there is nothing to undo.", TerminalLineKind.Error);
-                return;
-            }
-
-            if (!_agentRunner.TryUndoLastFileChange(out string undoneDisplayPath, out string failureReason))
-            {
-                _terminalView.AppendLineInstant($"undo: {failureReason}", TerminalLineKind.Error);
-                return;
-            }
-
-            _terminalView.AppendLineInstant($"undo: {undoneDisplayPath} is back the way it was.", TerminalLineKind.Notice);
-        }
-
-        // Both halves, always. Clearing only the screen would leave the agent remembering a
-        // conversation the user can no longer see, which is the worst of both.
-        void ClearScreenAndConversation()
-        {
-            // Dropped BEFORE the lines are cut out, so neither one is left holding a label that is
-            // no longer in the panel.
             FinishTheThoughtAndTheRunningToolCard();
-
-            _terminalView.ClearAllLines();
-
-            if (_agentRunner != null)
-                _agentRunner.ClearConversation();
-        }
-
-        void QuitApplication()
-        {
-#if UNITY_EDITOR
-            UnityEditor.EditorApplication.isPlaying = false;
-#else
-            Application.Quit();
-#endif
         }
 
         async UniTask RunAgentTurnAsync(string submittedCommand, CancellationToken cancellationToken)
@@ -845,100 +553,6 @@ namespace Amberline.Ui
             return string.Empty;
         }
 
-        // The gate has parked the whole run on an answer and raised this on the main thread. What
-        // the call would actually do still has to be worked out - a file read and a diff - so the
-        // card is built asynchronously and this returns at once, which is what keeps Escape live
-        // while the user is reading.
-        void HandleApprovalRequested(ApprovalRequest approvalRequest)
-        {
-            _approvalRequestWaitingForACard = approvalRequest;
-            ShowCardForApprovalRequestAsync(approvalRequest).Forget();
-        }
-
-        async UniTaskVoid ShowCardForApprovalRequestAsync(ApprovalRequest approvalRequest)
-        {
-            var fileChangePreview = await BuildFileChangePreviewForRequestAsync(approvalRequest);
-
-            // The run can be cancelled while the preview is being worked out. The gate has then
-            // already resolved this request, so a card for it would sit on screen forever with
-            // nothing behind it waiting for the answer.
-            if (!ReferenceEquals(_approvalRequestWaitingForACard, approvalRequest)) return;
-
-            if (fileChangePreview == null)
-            {
-                _approvalCardView.ShowRequest(approvalRequest);
-                return;
-            }
-
-            if (!fileChangePreview.IsAvailable)
-            {
-                LetTheCallRunSoTheModelReadsWhyItFailed(approvalRequest, fileChangePreview);
-                return;
-            }
-
-            _approvalCardView.ShowRequest(approvalRequest, fileChangePreview.Diff);
-        }
-
-        // Null means "this tool cannot describe its own change" - a command, or a tool with no
-        // preview at all - and the card then falls back to the payload the model asked for.
-        async UniTask<FileChangePreview> BuildFileChangePreviewForRequestAsync(ApprovalRequest approvalRequest)
-        {
-            var toolExecutor = _agentRunner.FindExecutorForToolName(approvalRequest.ToolName);
-
-            if (!(toolExecutor is IFileChangePreviewProvider fileChangePreviewProvider)) return null;
-            if (approvalRequest.Call == null) return null;
-
-            try
-            {
-                return await fileChangePreviewProvider.BuildFileChangePreviewAsync(approvalRequest.Call,
-                    GetCancellationTokenOfCurrentTurn());
-            }
-            catch (OperationCanceledException)
-            {
-                return null;
-            }
-            catch (Exception exception)
-            {
-                // A preview that throws must not take the approval down with it: the card can still
-                // be shown with the payload, and the user can still answer for it.
-                Debug.LogWarning($"[TerminalCliController] The {approvalRequest.ToolName} preview threw: {exception.GetType().Name}: {exception.Message}");
-                return null;
-            }
-        }
-
-        CancellationToken GetCancellationTokenOfCurrentTurn()
-        {
-            return _currentTurnCancellationSource == null
-                ? this.GetCancellationTokenOnDestroy()
-                : _currentTurnCancellationSource.Token;
-        }
-
-        // There is nothing to approve: the path is refused, the anchor matched nothing, the file
-        // already holds exactly that text. Showing a card would ask the user to authorise a change
-        // that cannot happen. So the call is let through instead - the executor works the same
-        // answer out again and hands the model the sentence that gets it unstuck.
-        void LetTheCallRunSoTheModelReadsWhyItFailed(ApprovalRequest approvalRequest, FileChangePreview fileChangePreview)
-        {
-            _terminalView.AppendLineInstant(
-                $"  nothing to approve — {approvalRequest.ToolName} cannot be applied, so it was let through to report why",
-                TerminalLineKind.Notice);
-
-            _agentRunner.ApprovalGate.SubmitDecision(new ApprovalDecision(true, false));
-        }
-
-        // Raised for every way a request stops being pending, answered or not. Closing the card
-        // here is what retires it when the user cancels the turn instead of answering.
-        void HandleApprovalResolved()
-        {
-            _approvalRequestWaitingForACard = null;
-            _approvalCardView.CloseCard();
-        }
-
-        void HandleApprovalAnswered(ApprovalDecision approvalDecision)
-        {
-            _agentRunner.ApprovalGate.SubmitDecision(approvalDecision);
-        }
-
         // A running command, printing. This is the only place in the product where the terminal
         // shows something while a tool is still working, and it is the reason a build does not look
         // like a hang: the compiler's own output arrives line by line, exactly as it would in a real
@@ -977,29 +591,11 @@ namespace Amberline.Ui
             var lineKind = toolResult.IsSuccess ? TerminalLineKind.ToolActivity : TerminalLineKind.Error;
             _terminalView.AppendLineInstant(BuildShortResultText(toolResult), lineKind);
 
-            AppendDiffOfTheFileChangeThatLanded(toolResult);
+            _approvalFlowPresenter.AppendDiffOfTheFileChangeThatLanded(toolResult);
 
             // The model is about to read this result and decide what to do next, and that decision
             // is the longest silent stretch of a run. Opened now, the block spins through it.
             OpenTheThoughtBlockIfThereIsNotOneOpen();
-        }
-
-        // Shown after EVERY write that lands, in every permission mode. The point of an auto-approve
-        // mode is that the user stops being asked, not that they stop being told - before this, a
-        // whole session of edits read as a column of "+3 -1" and nothing else. In ask-every-time the
-        // card showed a preview of what was ABOUT to happen; this is the record of what did.
-        void AppendDiffOfTheFileChangeThatLanded(ToolResult toolResult)
-        {
-            if (!toolResult.IsSuccess || toolResult.AppliedFileDiff == null) return;
-
-            if (_diffView == null)
-            {
-                Debug.LogWarning("[TerminalCliController] No diff view is assigned, so the change was only reported as a line.");
-                return;
-            }
-
-            _terminalView.AppendElementToLog(
-                _diffView.BuildDiffElement(toolResult.ChangedFileDisplayPath, toolResult.AppliedFileDiff.Lines));
         }
 
         // The model gets the whole output; the log gets its first line. Dumping two hundred lines
