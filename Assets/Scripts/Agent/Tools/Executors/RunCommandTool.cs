@@ -155,7 +155,7 @@ namespace Amberline.Agent
             return false;
         }
 
-        // The sandbox is a promise about the whole agent, not about six of its seven tools. Measured:
+        // The sandbox is a promise about the whole agent, not about every tool but this one. Measured:
         // told the file it wanted was not where it looked, the model answered `python ../hello.py`
         // and cmd.exe ran it one folder above the workspace - outside everything PathSandbox exists
         // to protect - and the only reason nothing was damaged is that the file was not there either.

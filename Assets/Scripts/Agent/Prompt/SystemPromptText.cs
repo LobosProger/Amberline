@@ -52,6 +52,7 @@ namespace Amberline.Agent
             "read_file {\"path\": \"Player.cs\", \"start_line\": 1, \"end_line\": 200}\n" +
             "list_dir {\"path\": \".\"}\n" +
             "grep {\"pattern\": \"AddScore\", \"path\": \".\"} - literal, not regex\n" +
+            "find_file {\"name\": \"Player.cs\"} - finds a file anywhere in the project\n" +
             "write_file {\"path\": \"New.cs\", \"content\": \"whole file\"}\n" +
             "edit_file {\"path\": \"Player.cs\", \"find\": \"old\", \"replace\": \"new\"}\n" +
             "run_command {\"command\": \"python hello.py\"}\n" +
@@ -83,8 +84,8 @@ namespace Amberline.Agent
             "<tool_call>{\"name\": \"edit_file\", \"arguments\": {\"path\": \"Player.cs\", \"find\": \"using System;\\nusing UnityEngine;\", \"replace\": \"using System;\\nusing System.Text;\\nusing UnityEngine;\"}}</tool_call>\n\n" +
 
             "<tool_response>ERROR read_file: no such file: palyer.cs</tool_response>\n" +
-            "Thought: Wrong name. Find the class instead.\n" +
-            "<tool_call>{\"name\": \"grep\", \"arguments\": {\"pattern\": \"class Player\", \"path\": \".\"}}</tool_call>\n\n" +
+            "Thought: Wrong name. Find the file instead.\n" +
+            "<tool_call>{\"name\": \"find_file\", \"arguments\": {\"name\": \"Player\"}}</tool_call>\n\n" +
 
             "<tool_response>hello.py written, 1 line</tool_response>\n" +
             "Thought: The file exists, so the task is done.\n" +

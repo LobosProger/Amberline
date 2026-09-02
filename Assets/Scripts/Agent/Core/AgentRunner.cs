@@ -157,6 +157,7 @@ namespace Amberline.Agent
             _toolRegistry.RegisterExecutor(new ReadFileTool(_pathSandbox));
             _toolRegistry.RegisterExecutor(new ListDirTool(_pathSandbox));
             _toolRegistry.RegisterExecutor(new GrepTool(_pathSandbox));
+            _toolRegistry.RegisterExecutor(new FindFileTool(_pathSandbox));
             _toolRegistry.RegisterExecutor(new WriteFileTool(_pathSandbox, _fileWriteService));
             _toolRegistry.RegisterExecutor(new EditFileTool(_pathSandbox, _fileWriteService));
             _toolRegistry.RegisterExecutor(new RunCommandTool(BuildCommandRunnerForWorkspaceFolder(workspaceFolderPath)));

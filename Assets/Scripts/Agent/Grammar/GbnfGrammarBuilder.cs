@@ -68,7 +68,7 @@ namespace Amberline.Agent
 
         /// <summary>
         /// Builds the grammar for the given tools, together with the prefill it assumes. Pass the
-        /// registry's callable tools, never the full seven - a tool with no executor must never
+        /// registry's callable tools, never the full list - a tool with no executor must never
         /// appear here. Returns <see cref="ToolCallGrammar.Unconstrained"/> when the list is empty.
         /// </summary>
         public static ToolCallGrammar BuildGrammarForTools(IReadOnlyList<ToolDefinition> callableTools)

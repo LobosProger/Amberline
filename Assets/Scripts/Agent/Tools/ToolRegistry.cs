@@ -7,7 +7,7 @@ namespace Amberline.Agent
     // may be called right now. Two separate facts are kept apart on purpose, because the layers
     // above need to tell them apart to write a useful message back to the model:
     //
-    // 1. Is this name one of our seven tools at all?  -> IsToolNameKnownToRegistry
+    // 1. Is this name one of the tools we ship at all?  -> IsToolNameKnownToRegistry
     // 2. Is there actually an executor behind it?     -> FindExecutorForToolName
     //
     // THERE USED TO BE A THIRD: a two-phase gate that started every session read-only and only
@@ -35,6 +35,7 @@ namespace Amberline.Agent
         public const string k_readFileToolName = "read_file";
         public const string k_listDirToolName = "list_dir";
         public const string k_grepToolName = "grep";
+        public const string k_findFileToolName = "find_file";
         public const string k_finishToolName = "finish";
         public const string k_writeFileToolName = "write_file";
         public const string k_editFileToolName = "edit_file";
@@ -47,6 +48,7 @@ namespace Amberline.Agent
             k_readFileToolName,
             k_listDirToolName,
             k_grepToolName,
+            k_findFileToolName,
             k_writeFileToolName,
             k_editFileToolName,
             k_runCommandToolName,
@@ -74,16 +76,17 @@ namespace Amberline.Agent
 
             if (!IsToolNameKnownToRegistry(toolName))
             {
-                // Registering an eighth tool would silently widen the grammar and the prompt would
-                // never mention it, so the model could be constrained into a call it was never told about.
-                Debug.LogWarning($"[ToolRegistry] '{toolName}' is not one of the seven tools in the system prompt and was ignored.");
+                // Registering a tool that is not on the list would silently widen the grammar while
+                // the prompt never mentioned it, so the model could be constrained into a call it was
+                // never told about. Adding a tool means adding it HERE and in SystemPromptText.
+                Debug.LogWarning($"[ToolRegistry] '{toolName}' is not one of the tools listed in the system prompt and was ignored.");
                 return;
             }
 
             _executorsByToolName[toolName] = toolExecutor;
         }
 
-        /// <summary>True when the name is one of the seven tools.</summary>
+        /// <summary>True when the name is one of the tools this registry ships.</summary>
         public bool IsToolNameKnownToRegistry(string toolName)
         {
             if (string.IsNullOrEmpty(toolName))
