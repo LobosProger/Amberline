@@ -41,10 +41,14 @@ namespace Amberline.Agent
         readonly ToolRegistry _toolRegistry;
         readonly ToolRunner _toolRunner;
         readonly AgentEvents _agentEvents;
+        readonly ChatTemplateRenderer _chatTemplateRenderer;
+        readonly PromptBuilder _promptBuilder;
         readonly RepeatedCallDetector _repeatedCallDetector = new RepeatedCallDetector();
 
         int _llmRoundTripsUsedInThisRun;
         bool _hasAutomaticCompactionFailedInThisRun;
+        bool _hasAnyToolSucceededInThisRun;
+        bool _wasAnEmptyFinishAlreadyRefusedInThisRun;
 
         // The cap counts ROUND TRIPS TO THE MODEL, not iterations, so a model that needs both passes
         // every time still terminates in bounded wall-clock time. A clean run costs two per tool
@@ -58,8 +62,21 @@ namespace Amberline.Agent
         const int k_maximumLlmRoundTripsPerRun = 14;
 
         // Enough for a plan plus a whole tool call after it, which is what makes the fast path
-        // possible. Larger only buys the model more room to ramble before it acts.
-        const int k_maximumTokensForOneThought = 256;
+        // possible. Larger only buys the model more room to ramble before it acts, and every one
+        // of these tokens is paid for at generation speed on a local model.
+        const int k_maximumTokensForOneThought = 192;
+
+        // The plan is prose and reads better with a little warmth in it. The call is JSON, and a
+        // whole file payload inside that JSON: there, anything but the most likely token is a
+        // defect. So the ACT pass is greedy, and the two samplers that fight code generation are
+        // switched off for it - a repetition penalty tuned for chat quietly pushes the model off
+        // the indentation, the closing brace and the "self." that source is made of, and a min-p
+        // floor can only remove tokens the grammar had already declared legal.
+        const float k_temperatureForOneThought = 0.3f;
+        const float k_temperatureForOneToolCall = 0f;
+        const int k_mostLikelyTokenOnly = 1;
+        const float k_repetitionPenaltyOff = 1f;
+        const float k_minimumProbabilityOff = 0f;
 
         // Used only if the registry somehow offers no callable tool budget to read.
         const int k_fallbackMaximumTokensForOneToolCall = 512;
@@ -81,18 +98,16 @@ namespace Amberline.Agent
         const string k_thinkBlockCloseTag = "</think>";
         const string k_summaryOfACancelledRun = "cancelled";
 
-        // Either tag means the assistant turn is over and the model has started inventing the next
-        // one. Generated text is cut at whichever appears first.
-        static readonly string[] k_chatMlTurnTags = { ChatMlPromptRenderer.k_turnEndTag, ChatMlPromptRenderer.k_turnStartTag };
-
         public AgentLoop(LlmGateway llmGateway, ContextManager contextManager, ToolRegistry toolRegistry,
-            ToolRunner toolRunner, AgentEvents agentEvents)
+            ToolRunner toolRunner, AgentEvents agentEvents, ChatTemplateRenderer chatTemplateRenderer)
         {
             _llmGateway = llmGateway;
             _contextManager = contextManager;
             _toolRegistry = toolRegistry;
             _toolRunner = toolRunner;
             _agentEvents = agentEvents;
+            _chatTemplateRenderer = chatTemplateRenderer;
+            _promptBuilder = new PromptBuilder(chatTemplateRenderer);
         }
 
         /// <summary>
@@ -104,6 +119,8 @@ namespace Amberline.Agent
         {
             _llmRoundTripsUsedInThisRun = 0;
             _hasAutomaticCompactionFailedInThisRun = false;
+            _hasAnyToolSucceededInThisRun = false;
+            _wasAnEmptyFinishAlreadyRefusedInThisRun = false;
             _repeatedCallDetector.Reset();
 
             RunReport reportOfThisRun = null;
@@ -160,7 +177,7 @@ namespace Amberline.Agent
         async UniTask<string> SummariseOlderMessagesAsync(IReadOnlyList<ChatMessage> olderMessages,
             CancellationToken cancellationToken)
         {
-            string summarisePrompt = PromptBuilder.BuildSummarisePrompt(olderMessages);
+            string summarisePrompt = _promptBuilder.BuildSummarisePrompt(olderMessages);
 
             var samplingForTheSummary = new LlmSamplingOverride
             {
@@ -172,7 +189,7 @@ namespace Amberline.Agent
                 onPartialText: null,
                 samplingForTheSummary,
                 grammar: null,
-                stopText: ChatMlPromptRenderer.k_turnEndTag,
+                stopText: _chatTemplateRenderer.AssistantTurnEndMarker,
                 cancellationToken);
 
             if (!summaryResult.IsSuccess)
@@ -194,7 +211,7 @@ namespace Amberline.Agent
                 return reportForARunThatCannotStart;
             }
 
-            await _contextManager.AddUserMessageAsync(PromptBuilder.BuildTaskMessageText(userTaskText));
+            await _contextManager.AddUserMessageAsync(_promptBuilder.BuildTaskMessageText(userTaskText));
 
             while (HasBudgetLeftForAnotherModelCall())
             {
@@ -298,7 +315,7 @@ namespace Amberline.Agent
             {
                 // The fast path: the model wrote its plan and the call in one breath, so the whole
                 // ACT pass is skipped and this turn costs one round trip instead of two.
-                assistantTurnText = PromptBuilder.k_thoughtPrefill + TakeTextUpToTheEndOfTheFirstToolCall(generatedThinkText);
+                assistantTurnText = _promptBuilder.ThoughtPrefill + TakeTextUpToTheEndOfTheFirstToolCall(generatedThinkText);
             }
             else
             {
@@ -335,11 +352,12 @@ namespace Amberline.Agent
         // the constrained call that follows a sensible one instead of the first tool it thought of.
         async UniTask<LlmCompletionResult> RunThinkPassAsync(CancellationToken cancellationToken)
         {
-            string thinkPrompt = PromptBuilder.BuildThinkPrompt(_contextManager.Messages);
+            string thinkPrompt = _promptBuilder.BuildThinkPrompt(_contextManager.Messages);
 
             var samplingForTheThought = new LlmSamplingOverride
             {
-                MaximumTokensToGenerate = k_maximumTokensForOneThought
+                MaximumTokensToGenerate = k_maximumTokensForOneThought,
+                Temperature = k_temperatureForOneThought
             };
 
             _llmRoundTripsUsedInThisRun++;
@@ -349,7 +367,7 @@ namespace Amberline.Agent
                 rawCumulativeText => ShowThoughtWhileItIsBeingWritten(rawCumulativeText),
                 samplingForTheThought,
                 grammar: null,
-                stopText: ChatMlPromptRenderer.k_turnEndTag,
+                stopText: _chatTemplateRenderer.AssistantTurnEndMarker,
                 cancellationToken);
         }
 
@@ -383,12 +401,16 @@ namespace Amberline.Agent
         {
             var toolCallGrammar = GbnfGrammarBuilder.BuildGrammarForTools(_toolRegistry.GetDefinitionsOfCallableTools());
 
-            string actPrefill = PromptBuilder.BuildActPrefill(thoughtText, null, toolCallGrammar.PrefillText);
-            string actPrompt = PromptBuilder.BuildActPrompt(_contextManager.Messages, thoughtText, null, toolCallGrammar.PrefillText);
+            string actPrefill = _promptBuilder.BuildActPrefill(thoughtText, null, toolCallGrammar.PrefillText);
+            string actPrompt = _promptBuilder.BuildActPrompt(_contextManager.Messages, thoughtText, null, toolCallGrammar.PrefillText);
 
             var samplingForTheCall = new LlmSamplingOverride
             {
-                MaximumTokensToGenerate = FindLargestResponseBudgetAmongCallableTools()
+                MaximumTokensToGenerate = FindLargestResponseBudgetAmongCallableTools(),
+                Temperature = k_temperatureForOneToolCall,
+                TopK = k_mostLikelyTokenOnly,
+                RepeatPenalty = k_repetitionPenaltyOff,
+                MinP = k_minimumProbabilityOff
             };
 
             _llmRoundTripsUsedInThisRun++;
@@ -452,7 +474,99 @@ namespace Amberline.Agent
                 return BuildRefusalForARepeatedCall(toolCall);
             }
 
-            return await _toolRunner.RunAsync(parseResult, cancellationToken);
+            if (toolCall != null && _repeatedCallDetector.HasThisExactCallAlreadyFailed(toolCall))
+            {
+                return BuildRefusalForACallThatAlreadyFailed(toolCall);
+            }
+
+            var refusalOfAnEmptyFinish = BuildRefusalWhenFinishWouldEndARunThatDidNothing(toolCall);
+            if (refusalOfAnEmptyFinish != null)
+            {
+                return refusalOfAnEmptyFinish;
+            }
+
+            var toolResult = await _toolRunner.RunAsync(parseResult, cancellationToken);
+
+            if (!toolResult.IsSuccess)
+            {
+                _repeatedCallDetector.RememberCallThatFailed(toolCall);
+            }
+            else if (DidThisCallChangeSomethingOutsideTheProcess(toolCall))
+            {
+                // The world just moved, so every call that failed against the old state deserves
+                // another go - starting with the command the agent is about to re-run to check
+                // the fix it has only this moment written.
+                _repeatedCallDetector.ForgetCallsThatFailed();
+            }
+
+            RememberWhetherThisCallDidAnyWork(toolCall, toolResult);
+            return toolResult;
+        }
+
+        bool DidThisCallChangeSomethingOutsideTheProcess(ToolCall toolCall)
+        {
+            var toolExecutor = toolCall == null ? null : _toolRegistry.FindExecutorForToolName(toolCall.ToolName);
+            if (toolExecutor == null || toolExecutor.Definition == null)
+            {
+                return false;
+            }
+
+            return toolExecutor.Definition.IsMutating || toolExecutor.Definition.IsCommand;
+        }
+
+        // The same call, unchanged, after it has already failed once. It will fail the same way, so
+        // the round trip is spent on the way out of the loop instead of on the loop.
+        static ToolResult BuildRefusalForACallThatAlreadyFailed(ToolCall toolCall)
+        {
+            return ToolResult.Failure(
+                $"you already sent this exact {toolCall.ToolName} call in this run and it failed. Sending it again " +
+                "changes nothing. Change the arguments, use a different tool - write_file replaces a whole file and " +
+                "needs no anchor - or call finish and say what stopped you.");
+        }
+
+        // finish is the one tool that ends the run, and a model that calls it first ends the run
+        // having done nothing at all - with a summary that reads like a report of work it never
+        // did. Measured twice in one session: "Wrote hello.py." for a file that was never created,
+        // and "Reading hello.py to confirm changes." as the final answer of a run that read
+        // nothing. The user is told the task is done; the disk says otherwise.
+        //
+        // Refused ONCE per run, never twice. A run really can be over after nothing - "thanks,
+        // that is all" - and a guard that could not be talked past would trap the model in a loop
+        // it has no way out of. One nudge is enough to get the work started and cheap enough to be
+        // wrong about.
+        ToolResult BuildRefusalWhenFinishWouldEndARunThatDidNothing(ToolCall toolCall)
+        {
+            if (toolCall == null || toolCall.ToolName != ToolRegistry.k_finishToolName)
+            {
+                return null;
+            }
+
+            if (_hasAnyToolSucceededInThisRun || _wasAnEmptyFinishAlreadyRefusedInThisRun)
+            {
+                return null;
+            }
+
+            _wasAnEmptyFinishAlreadyRefusedInThisRun = true;
+
+            return ToolResult.Failure(
+                "you have not used a single tool yet, so there is nothing to finish and nothing to report. " +
+                "Do the work first: list_dir or read_file to look, write_file or edit_file to change something, " +
+                "run_command to check it. Call finish once the work is actually on disk.");
+        }
+
+        void RememberWhetherThisCallDidAnyWork(ToolCall toolCall, ToolResult toolResult)
+        {
+            if (toolCall == null || toolResult == null || !toolResult.IsSuccess)
+            {
+                return;
+            }
+
+            if (toolCall.ToolName == ToolRegistry.k_finishToolName)
+            {
+                return;
+            }
+
+            _hasAnyToolSucceededInThisRun = true;
         }
 
         // Told plainly and handed back, rather than ending the run. A model stuck on one call can
@@ -479,21 +593,28 @@ namespace Amberline.Agent
         // decorating on the way out would quietly break the append-only guarantee the cache rests on.
         async UniTask AppendToolResultToTranscriptAsync(ToolResult toolResult)
         {
-            await _contextManager.AddUserMessageAsync(PromptBuilder.BuildToolResultMessageText(toolResult.Output));
+            await _contextManager.AddUserMessageAsync(_promptBuilder.BuildToolResultMessageText(toolResult.Output));
         }
 
         // The model wrote its plan and kept going into the call. Taking that call is worth a whole
         // round trip, but only when it is complete: a call the token budget cut in half is handed
         // back to the ACT pass instead, where the grammar can write it properly.
+        //
+        // ONLY THE FIRST WHOLE BLOCK IS READ, and that is not fussiness. A model that keeps
+        // narrating often writes a second call after the first - measured, a correct edit_file
+        // followed by a speculative finish - and the parse ladder takes the LAST block it is given,
+        // while the assistant turn stored below keeps only up to the FIRST closing tag. Handing the
+        // ladder the whole tail therefore executed one call and wrote a different one into the
+        // transcript, so the next turn read a history that had never happened.
         static ToolCallParseResult TryTakeTheToolCallTheThinkPassRanInto(string generatedThinkText)
         {
-            int indexOfOpenTag = generatedThinkText.IndexOf(k_toolCallOpenTag, StringComparison.OrdinalIgnoreCase);
-            if (indexOfOpenTag < 0)
+            string firstWholeToolCallBlock = TakeTheFirstWholeToolCallBlock(generatedThinkText);
+            if (firstWholeToolCallBlock == null)
             {
                 return null;
             }
 
-            var parseResult = ToolCallParser.Parse(generatedThinkText.Substring(indexOfOpenTag));
+            var parseResult = ToolCallParser.Parse(firstWholeToolCallBlock);
 
             if (!parseResult.IsToolCall || parseResult.WasTruncated)
             {
@@ -501,6 +622,25 @@ namespace Amberline.Agent
             }
 
             return parseResult;
+        }
+
+        // Null when there is no call, or when the one that started never finished - both are cases
+        // for the ACT pass rather than for guesswork here.
+        static string TakeTheFirstWholeToolCallBlock(string generatedText)
+        {
+            int indexOfOpenTag = generatedText.IndexOf(k_toolCallOpenTag, StringComparison.OrdinalIgnoreCase);
+            if (indexOfOpenTag < 0)
+            {
+                return null;
+            }
+
+            int indexOfCloseTag = generatedText.IndexOf(k_toolCallCloseTag, indexOfOpenTag, StringComparison.OrdinalIgnoreCase);
+            if (indexOfCloseTag < 0)
+            {
+                return null;
+            }
+
+            return generatedText.Substring(indexOfOpenTag, indexOfCloseTag + k_toolCallCloseTag.Length - indexOfOpenTag);
         }
 
         static string TakeTextBeforeTheFirstToolCall(string generatedText)
@@ -529,17 +669,32 @@ namespace Amberline.Agent
         // Kept from M2 as belt and braces beside the closed think block the prefill already opens
         // with. That prefill is a prompt-level trick, not a guarantee, and a small model can still
         // open a block of its own.
-        static string RemoveReasoningAndTurnTagsFromText(string generatedText)
+        string RemoveReasoningAndTurnTagsFromText(string generatedText)
         {
             if (string.IsNullOrEmpty(generatedText))
             {
                 return string.Empty;
             }
 
-            string textWithoutReasoning = RemoveThinkBlocksFromText(generatedText);
+            // The escapes come off FIRST, before anything looks for a tag or a brace. Every reader
+            // below this line searches for literal "<tool_call>" and literal JSON, and a model that
+            // escaped its underscores hands them "<tool\_call>" instead - which matches nothing at
+            // all. See MarkdownEscapeCleaner for the run this cost.
+            string textWithoutMarkdownEscapes = MarkdownEscapeCleaner.RemoveMarkdownEscapesFromText(generatedText);
+
+            string textWithoutReasoning = RemoveThinkBlocksFromText(textWithoutMarkdownEscapes);
             return CutTextAtTheEndOfTheAssistantTurn(textWithoutReasoning).TrimEnd();
         }
 
+        // A CLOSED block is reasoning the model has already finished with, and what follows it is
+        // its conclusion - so the block goes and the conclusion stays.
+        //
+        // An UNCLOSED one used to take everything with it, and that was a real bug rather than a
+        // tidy-up: a reasoning model that spends its whole thought budget inside one block has
+        // written a perfectly good plan and never got to close it, and returning the empty string
+        // for it threw the plan away, showed the user a spinner over nothing, and sent the ACT
+        // pass in blind. Now only the tag is dropped and the reasoning becomes the thought, which
+        // is exactly what the folded "thinking" line in the terminal is for.
         static string RemoveThinkBlocksFromText(string generatedText)
         {
             string remainingText = generatedText;
@@ -555,9 +710,7 @@ namespace Amberline.Agent
                 int closeTagIndex = remainingText.IndexOf(k_thinkBlockCloseTag, openTagIndex, StringComparison.Ordinal);
                 if (closeTagIndex < 0)
                 {
-                    // An unclosed block means the text is mid-stream or was cut off inside the
-                    // reasoning. Either way the tail must not reach the screen.
-                    return remainingText.Substring(0, openTagIndex);
+                    return remainingText.Remove(openTagIndex, k_thinkBlockOpenTag.Length);
                 }
 
                 int lengthOfTheWholeBlock = closeTagIndex + k_thinkBlockCloseTag.Length - openTagIndex;
@@ -568,20 +721,14 @@ namespace Amberline.Agent
         // Cut, never erase. The gateway trims the FINAL text at the stop marker, but the streaming
         // callbacks carry the raw text, so a model running past the marker would otherwise flash the
         // opening of a turn it invented on screen before the cancel lands.
-        static string CutTextAtTheEndOfTheAssistantTurn(string generatedText)
+        //
+        // Which markers those are is the loaded model's business, not ours - see
+        // ChatTemplateRenderer. Hard-coding the ChatML pair here was one of the places where a
+        // Mistral ran straight on into writing the user's next message and nothing stopped it.
+        string CutTextAtTheEndOfTheAssistantTurn(string generatedText)
         {
-            int indexOfEarliestTurnTag = generatedText.Length;
-
-            foreach (string turnTag in k_chatMlTurnTags)
-            {
-                int indexOfThisTurnTag = generatedText.IndexOf(turnTag, StringComparison.Ordinal);
-                if (indexOfThisTurnTag >= 0 && indexOfThisTurnTag < indexOfEarliestTurnTag)
-                {
-                    indexOfEarliestTurnTag = indexOfThisTurnTag;
-                }
-            }
-
-            return generatedText.Substring(0, indexOfEarliestTurnTag);
+            int indexWhereTheTurnEnds = _chatTemplateRenderer.FindIndexWhereTheAssistantTurnEnds(generatedText);
+            return generatedText.Substring(0, indexWhereTheTurnEnds);
         }
 
         RunReport BuildReportForCancelledRun()

@@ -33,7 +33,12 @@ namespace Amberline.Agent
             parameterNames: new[] { "path", "start_line", "end_line" },
             isMutating: false,
             isCommand: false,
-            maximumResponseTokens: 512);
+            maximumResponseTokens: 512,
+            // No window means "from the top, as much as the budget allows", which is what the
+            // reader already does with them missing. Measured: a model that wrote read_file with
+            // only a path inside its plan spent a whole round trip being told to add two numbers
+            // this tool was going to default anyway.
+            parameterNamesWithASafeDefault: new[] { "start_line", "end_line" });
 
         const long k_maximumFileSizeInBytes = 16L * 1024L * 1024L;
         const int k_binarySniffByteCount = 4096;
@@ -60,7 +65,7 @@ namespace Amberline.Agent
 
             if (string.IsNullOrWhiteSpace(suppliedPath))
             {
-                return ToolResult.Failure("read_file needs a path. Call it again as read_file with arguments path, start_line and end_line, for example path src/Player.cs, start_line 1, end_line 200.");
+                return ToolResult.Failure("read_file needs a path. Call it again as read_file with arguments path, start_line and end_line, for example path Player.cs, start_line 1, end_line 200.");
             }
 
             if (!_pathSandbox.TryResolvePath(suppliedPath, out string absoluteFilePath, out string rejectionReason))
@@ -77,7 +82,7 @@ namespace Amberline.Agent
 
             if (!File.Exists(absoluteFilePath))
             {
-                return ToolResult.Failure($"read_file: no such file: {displayPath}. Call list_dir on the folder above it, or grep for a name you know, to find the correct path.");
+                return ToolResult.Failure($"read_file: no such file: {displayPath}. Call list_dir with path . to see the project root, or grep for a name you know. Never answer this with \"..\" - the sandbox refuses every path that leaves the project folder.");
             }
 
             ToolResult fileGuardFailure = CheckFileIsReadableText(absoluteFilePath, displayPath);

@@ -10,15 +10,27 @@ namespace Amberline.Agent
     /// describe it, and the runner reads <see cref="IsMutating"/> to decide whether the call has
     /// to pass the approval gate.
     /// <para>
-    /// Every parameter is required. An optional one would force the grammar into an alternation
-    /// over subsets of keys, multiplying the rules and handing the model back exactly the choice
-    /// that constrained decoding exists to take away.
+    /// The GRAMMAR always writes every parameter. An optional key would force it into an
+    /// alternation over subsets, multiplying the rules and handing the model back exactly the
+    /// choice constrained decoding exists to take away.
+    /// </para>
+    /// <para>
+    /// The RUNNER is more forgiving, and it has to be. A call the model wrote inside its own plan
+    /// never went through the grammar, and there it writes what a person would - read_file with a
+    /// path and no line numbers. Refusing that costs a whole round trip to be told something the
+    /// tool could have assumed: <see cref="ParameterNamesWithASafeDefault"/> is the short list of
+    /// arguments where the assumption is unambiguous, and it never includes one whose absence
+    /// could be read as "empty" - a write_file with no content must always be refused.
     /// </para>
     /// </summary>
     public class ToolDefinition
     {
         public string Name { get; }
         public IReadOnlyList<string> ParameterNames { get; }
+
+        /// <summary>Parameters the executor fills in for itself when they are missing, so the
+        /// runner lets a call through without them. Empty for every mutating tool.</summary>
+        public IReadOnlyList<string> ParameterNamesWithASafeDefault { get; }
 
         /// <summary>True when the tool changes something outside the process - a file or the OS.</summary>
         public bool IsMutating { get; }
@@ -29,13 +41,29 @@ namespace Amberline.Agent
         /// <summary>How many tokens the model may spend producing a call to this tool.</summary>
         public int MaximumResponseTokens { get; }
 
-        public ToolDefinition(string name, IReadOnlyList<string> parameterNames, bool isMutating, bool isCommand, int maximumResponseTokens)
+        public ToolDefinition(string name, IReadOnlyList<string> parameterNames, bool isMutating, bool isCommand,
+            int maximumResponseTokens, IReadOnlyList<string> parameterNamesWithASafeDefault = null)
         {
             Name = name;
             ParameterNames = parameterNames ?? new List<string>();
+            ParameterNamesWithASafeDefault = parameterNamesWithASafeDefault ?? new List<string>();
             IsMutating = isMutating;
             IsCommand = isCommand;
             MaximumResponseTokens = maximumResponseTokens;
+        }
+
+        /// <summary>True when the executor can run without <paramref name="parameterName"/>.</summary>
+        public bool CanRunWithout(string parameterName)
+        {
+            foreach (string nameWithADefault in ParameterNamesWithASafeDefault)
+            {
+                if (nameWithADefault == parameterName)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
     }
 

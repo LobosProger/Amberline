@@ -107,3 +107,9 @@ nul
 
 # Private, machine-local instructions - explicitly not for checking in.
 CLAUDE.local.md
+
+# Package samples imported through the Package Manager. Regenerable from the
+# LLM for Unity package on demand, and only ever imported here to compare our
+# own path against the package's ChatBot sample.
+/[Aa]ssets/[Ss]amples/
+/[Aa]ssets/[Ss]amples.meta

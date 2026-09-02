@@ -181,22 +181,39 @@ namespace Amberline.Agent
                 // Modern build tools write UTF-8, and a compiler message is what this product
                 // exists to carry, so UTF-8 wins the one choice available here. The cost is real
                 // and one-sided: an OLD Windows tool that still writes the console OEM code page -
-                // ping, findstr - comes back as mojibake in its non-ASCII text on a non-English
-                // system. Measured, not guessed. ASCII is identical either way.
+                // ping, findstr, and cmd's own dir - comes back as mojibake in its non-ASCII text
+                // on a non-English system. Measured, not guessed. ASCII is identical either way.
+                //
+                // There is no third option that fixes both. Prefixing the command with
+                // `chcp 65001` was tried and measured: it changes nothing, because cmd fixes the
+                // encoding of its BUILT-IN commands when it starts, before the chcp in its own
+                // command line ever runs. The same measurement confirmed the split - reading the
+                // console code page instead gets `dir` right and turns `dotnet --help` into
+                // mojibake, which is the worse half of the trade for a coding agent.
                 StandardOutputEncoding = Encoding.UTF8,
                 StandardErrorEncoding = Encoding.UTF8
             };
 
+            // Python picks its own stdout encoding from the console and lands on the OEM page,
+            // which is exactly the mojibake case above. This pins it to the encoding we read with.
+            shellStartInformation.Environment["PYTHONIOENCODING"] = "utf-8";
+
             return Process.Start(shellStartInformation);
         }
 
-        // /d skips whatever the user's AutoRun registry key would otherwise run first, so a
-        // developer with a custom cmd profile does not get their banner mixed into the build log.
+        // Two flags, each fixing its own broken case:
+        //
+        // /d   skips whatever the user's AutoRun registry key would otherwise run first, so a
+        //      developer with a custom cmd profile does not get their banner mixed into the log.
+        //
+        // /s   plus wrapping the whole command in quotes makes cmd take everything between the
+        //      FIRST and LAST quote literally. Without it, cmd strips the outer quote pair of a
+        //      command like `"C:\Program Files\tool.exe" --arg` and the path breaks in half.
         static string BuildShellArguments(string commandText)
         {
             if (IsRunningOnWindows())
             {
-                return "/d /c " + commandText;
+                return "/d /s /c \"" + commandText + "\"";
             }
 
             return "-c \"" + commandText.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";

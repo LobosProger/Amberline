@@ -75,7 +75,10 @@ namespace Amberline.Agent
                 return ToolResult.Failure($"write_file: {writeOutcome.FailureMessage}");
             }
 
-            return ToolResult.Success(BuildSuccessOutputText(plannedChange, writeOutcome));
+            // The diff goes back with the result so the terminal can show what landed even when
+            // no approval card was drawn - which is the whole of auto-approve mode.
+            return ToolResult.SuccessWithFileChange(BuildSuccessOutputText(plannedChange, writeOutcome),
+                writeOutcome.DisplayPath, plannedChange.Diff);
         }
 
         // Works out exactly what would be written, and why it could not be. Called once to build
@@ -89,7 +92,7 @@ namespace Amberline.Agent
             if (string.IsNullOrWhiteSpace(suppliedPath))
             {
                 return FileChangePreview.Unavailable(k_toolDefinition.Name,
-                    "write_file needs a path. Call it again as write_file with arguments path and content, for example path src/Player.cs.");
+                    "write_file needs a path. Call it again as write_file with arguments path and content, for example path Player.cs.");
             }
 
             if (!_pathSandbox.TryResolvePath(suppliedPath, out string absoluteFilePath, out string rejectionReason))

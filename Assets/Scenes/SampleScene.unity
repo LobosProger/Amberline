@@ -181,7 +181,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: UnityEngine.UI::UnityEngine.EventSystems.EventSystem
   m_FirstSelected: {fileID: 0}
-  m_sendNavigationEvents: 1
+  m_sendNavigationEvents: 0
   m_DragThreshold: 10
 --- !u!4 &126702818
 Transform:
@@ -589,11 +589,14 @@ MonoBehaviour:
   _terminalView: {fileID: 678050294}
   _commandInputView: {fileID: 678050293}
   _spinnerView: {fileID: 678050292}
+  _autoScrollView: {fileID: 678050289}
   _topBarView: {fileID: 678050291}
   _statusBarView: {fileID: 678050290}
   _approvalCardView: {fileID: 678050298}
+  _diffView: {fileID: 678050299}
   _agentRunner: {fileID: 1667713382}
-  _workspaceFolderPath: 
+  _workspaceFolderPath: C:/UnityProjects/Sentis code cli
+  _shouldRememberTheWorkspaceFolderBetweenSessions: 1
 --- !u!114 &678050289
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -910,18 +913,18 @@ MonoBehaviour:
   _SSLCert: 
   _SSLKey: 
   _numThreads: -1
-  _numGPULayers: 99
+  _numGPULayers: 50
   _parallelPrompts: 1
-  _contextSize: 6144
-  _batchSize: 256
-  _model: Qwen3-8B-Q4_K_M.gguf
+  _contextSize: 8192
+  _batchSize: 512
+  _model: Qwen3-4B-Q4_K_M.gguf
   _flashAttention: 0
   _reasoning: 0
   _lora: 
   _loraWeights: 
   dontDestroyOnLoad: 1
   _embeddingsOnly: 0
-  _embeddingLength: 4096
+  _embeddingLength: 2560
   minContextLength: 0
   maxContextLength: 40960
 --- !u!4 &1667713378

@@ -1,4 +1,3 @@
-using System;
 using System.Threading;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
@@ -7,29 +6,20 @@ using UnityEngine.UIElements;
 namespace Amberline.Ui
 {
     /// <summary>
-    /// Shows a temporary "working" line between the user's command and the answer. It types out
-    /// one of the rotating phrases, then cycles ASCII spinner frames for exactly as long as the
-    /// work it covers takes, and removes itself afterwards - even when that work throws.
+    /// Shows a temporary "thinking" line between the user's command and the answer. It types the
+    /// word out, then cycles ASCII spinner frames for exactly as long as the work it covers takes,
+    /// and removes itself afterwards - even when that work throws.
     /// </summary>
     public class SpinnerView : MonoBehaviour
     {
         VisualElement _terminalContent;
 
-        // Rotates through the phrases so a long session does not repeat the same word every turn.
-        // An instance field rather than a static one, so re-entering Play mode starts fresh.
-        int _currentPhraseIndex;
+        // One word, not a rotation. This spinner covers only the silence before the first token,
+        // and ThinkingBlock takes over from it on that token with a spinner of its own. When the
+        // two said different words - "planning" here, "thinking" there - the hand-over read as one
+        // indicator being replaced by another rather than as work carrying on.
+        const string k_wordShownWhileWorking = "thinking";
 
-        static readonly string[] k_spinnerFrames = { "[ \\ ]", "[ | ]", "[ / ]", "[ | ]" };
-        static readonly string[] k_workingPhrases =
-        {
-            "thinking",
-            "reading",
-            "reasoning",
-            "planning",
-            "working"
-        };
-
-        const long k_spinnerFrameIntervalMs = 120;
         const float k_phraseCharacterDelaySeconds = 0.02f;
         const string k_spinnerLineClassName = "line--tool-text";
 
@@ -48,12 +38,10 @@ namespace Amberline.Ui
             spinnerLabel.AddToClassList(k_spinnerLineClassName);
             _terminalContent.Add(spinnerLabel);
 
-            var phrase = PickNextPhrase();
-
             try
             {
-                await TerminalTextAnimator.TypeTextWithBlinkingCursorAsync(spinnerLabel, phrase, k_phraseCharacterDelaySeconds, cancellationToken);
-                return await RunSpinnerFramesUntilAsync(spinnerLabel, phrase, work, cancellationToken);
+                await TerminalTextAnimator.TypeTextWithBlinkingCursorAsync(spinnerLabel, k_wordShownWhileWorking, k_phraseCharacterDelaySeconds, cancellationToken);
+                return await RunSpinnerFramesUntilAsync(spinnerLabel, work);
             }
             finally
             {
@@ -61,25 +49,13 @@ namespace Amberline.Ui
             }
         }
 
-        string PickNextPhrase()
+        // Once the word is typed, LineSpinner swaps the trailing frame on a fixed beat until the
+        // work completes. The frames and the beat live there, so this spinner and the one on the
+        // thought line stay in step.
+        async UniTask<TResult> RunSpinnerFramesUntilAsync<TResult>(Label spinnerLabel, UniTask<TResult> work)
         {
-            var phrase = k_workingPhrases[_currentPhraseIndex];
-            _currentPhraseIndex = (_currentPhraseIndex + 1) % k_workingPhrases.Length;
-            return phrase;
-        }
-
-        // Once the phrase is typed, keep swapping the trailing frame on a fixed beat until the
-        // work completes, then stop the schedule and hand the work's result back.
-        async UniTask<TResult> RunSpinnerFramesUntilAsync<TResult>(Label spinnerLabel, string phrase, UniTask<TResult> work, CancellationToken cancellationToken)
-        {
-            int currentFrameIndex = 0;
-            spinnerLabel.text = phrase + " " + k_spinnerFrames[0];
-
-            var spinnerFrameSchedule = spinnerLabel.schedule.Execute(() =>
-            {
-                currentFrameIndex = (currentFrameIndex + 1) % k_spinnerFrames.Length;
-                spinnerLabel.text = phrase + " " + k_spinnerFrames[currentFrameIndex];
-            }).Every(k_spinnerFrameIntervalMs);
+            var lineSpinner = new LineSpinner();
+            lineSpinner.Start(spinnerLabel, k_wordShownWhileWorking);
 
             try
             {
@@ -87,7 +63,7 @@ namespace Amberline.Ui
             }
             finally
             {
-                spinnerFrameSchedule.Pause();
+                lineSpinner.Stop(spinnerLabel.text);
             }
         }
     }

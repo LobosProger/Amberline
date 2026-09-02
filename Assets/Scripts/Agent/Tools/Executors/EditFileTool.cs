@@ -100,7 +100,10 @@ namespace Amberline.Agent
                 return ToolResult.Failure($"edit_file: {writeOutcome.FailureMessage}");
             }
 
-            return ToolResult.Success($"edited {writeOutcome.DisplayPath} ({plannedChange.Diff.DescribeChangeCounts()} lines).");
+            // The diff goes back with the result so the terminal can show what landed even when
+            // no approval card was drawn - which is the whole of auto-approve mode.
+            return ToolResult.SuccessWithFileChange($"edited {writeOutcome.DisplayPath} ({plannedChange.Diff.DescribeChangeCounts()} lines).",
+                writeOutcome.DisplayPath, plannedChange.Diff);
         }
 
         // Works out exactly what would be written, and why it could not be. Called once to build
@@ -518,6 +521,14 @@ namespace Amberline.Agent
 
         // Naming the closest line turns a dead end into a next move: the model reads that line and
         // copies the real text, instead of guessing at a slightly different anchor.
+        //
+        // AND IT ALWAYS OFFERS write_file, because "copy it more carefully" is advice a 7B model
+        // cannot always take. Measured: asked to add a line to a one-line hello.py, mistral-7b sent
+        // find as print("Hello, world!"); - the real line plus a semicolon Python never had - and
+        // then spent every remaining round trip in a read, edit, fail, read, edit, fail loop,
+        // apologising each time. It had the exact text quoted back at it and still could not
+        // reproduce it. write_file needs no anchor at all, so it is the one move that always works,
+        // and a model that is clearly stuck has to be told that it exists.
         static string BuildMessageForFindThatMatchedNothing(FileTextInfo fileText, string normalizedFindText,
             string displayPath, CancellationToken cancellationToken)
         {
@@ -525,16 +536,20 @@ namespace Amberline.Agent
             string[] findLines = FileText.SplitIntoLines(normalizedFindText);
             string firstFindLine = findLines.Length > 0 ? findLines[0].Trim() : string.Empty;
 
+            string wayOutOfTheLoop =
+                $" This file has {fileLines.Length} lines. If the exact text keeps eluding you, stop using edit_file " +
+                $"and call write_file on {displayPath} with the whole file, changed the way you want it - that needs no anchor and always works.";
+
             if (TryFindClosestLine(fileLines, firstFindLine, cancellationToken, out int closestLineNumber, out string closestLineText))
             {
                 string quotedClosestLine = ToolOutputTruncator.ShortenSingleLine(closestLineText.Trim(), k_maximumQuotedLineLength);
 
-                return $"edit_file: the find text does not appear in {displayPath}, so nothing was written. The closest line is line {closestLineNumber}: {quotedClosestLine} " +
-                    "Call read_file around that line, copy the exact text including its indentation, and include enough surrounding lines to make it unique.";
+                return $"edit_file: the find text does not appear in {displayPath}, so nothing was written. Line {closestLineNumber} is the closest, and it reads EXACTLY: {quotedClosestLine} " +
+                    "Copy that text character for character - do not add a semicolon, a bracket or a space it does not have." + wayOutOfTheLoop;
             }
 
             return $"edit_file: the find text does not appear in {displayPath}, so nothing was written. " +
-                "Call read_file on it, copy the exact lines you want to change, and call edit_file again with them.";
+                "Call read_file on it and copy the exact lines you want to change." + wayOutOfTheLoop;
         }
 
         static bool TryFindClosestLine(string[] fileLines, string firstFindLine, CancellationToken cancellationToken,

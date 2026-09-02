@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading;
+using System.Threading.Tasks;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
 
@@ -28,6 +29,7 @@ namespace Amberline.Agent
         readonly ApprovalGate _approvalGate = new ApprovalGate();
 
         ContextManager _contextManager;
+        ChatTemplateRenderer _chatTemplateRenderer;
         PathSandbox _pathSandbox;
         FileWriteService _fileWriteService;
         ToolRegistry _toolRegistry;
@@ -36,11 +38,22 @@ namespace Amberline.Agent
 
         string _workspaceFolderPath = string.Empty;
 
-        // Pinning the system prompt is async, and both Start and the first turn want it done. Held
-        // as one preserved task so two callers wait on the same work instead of each inserting a
-        // system block of its own.
-        UniTask _pinningOfTheSystemPrompt;
-        bool _hasStartedPinningTheSystemPrompt;
+        // The listing of the workspace that is pinned underneath the system prompt. Worked out once
+        // per folder, because the pinned block has to stay byte-identical for the whole session.
+        string _workspaceBriefText = string.Empty;
+
+        // Pinning the system prompt is async, and several callers want it done: Start kicks it
+        // off, /cd re-pins with a new workspace brief, and the first turn the user submits waits
+        // for whichever of those is in flight. Held as ONE task so they share the work instead of
+        // each inserting a system block of its own.
+        //
+        // A System.Threading.Tasks.Task and not a UniTask, and that is not an oversight. UniTask's
+        // Preserve() memoises a RESULT: a second awaiter arriving while the first is still waiting
+        // throws "Already continuation registered, can not await twice". On a cold model this
+        // waits for the weights to load, which is tens of seconds of overlap - and a run started
+        // in that window died on that exception before it reached the model. Task allows any
+        // number of concurrent awaiters, which is exactly what this needs.
+        Task _pinningOfTheSystemPrompt;
 
         /// <summary>Everything that happens inside a run, for the terminal to render.</summary>
         public AgentEvents Events => _agentEvents;
@@ -52,16 +65,27 @@ namespace Amberline.Agent
         /// </summary>
         public ApprovalGate ApprovalGate => _approvalGate;
 
-        /// <summary>How far the agent has been let into the workspace right now. Backs /tools.</summary>
-        public ToolPhase CurrentToolPhase => _toolRegistry.CurrentPhase;
-
         /// <summary>The folder every tool is sandboxed to.</summary>
         public string WorkspaceFolderPath => _workspaceFolderPath;
 
         void Awake()
         {
             _contextManager = new ContextManager(BuildTokenCounterFromTheModel());
+            _chatTemplateRenderer = new ChatTemplateRenderer(BuildChatTemplateApplierFromTheModel());
             BuildToolStackForWorkspaceFolder(ResolveFallbackWorkspaceFolderPath());
+        }
+
+        // The loaded model's own chat template, so the transcript is rendered in the envelope that
+        // model was trained on rather than in one format this project picked. Null when there is no
+        // gateway, and the renderer then falls back to ChatML.
+        Func<IReadOnlyList<ChatMessage>, string> BuildChatTemplateApplierFromTheModel()
+        {
+            if (_llmGateway == null)
+            {
+                return null;
+            }
+
+            return _llmGateway.ApplyTheModelsOwnChatTemplate;
         }
 
         // The model's own tokenizer, so the status bar reports real token counts instead of the
@@ -118,6 +142,11 @@ namespace Amberline.Agent
             _workspaceFolderPath = workspaceFolderPath;
             _pathSandbox = new PathSandbox(workspaceFolderPath);
 
+            // Read off disk once, here, and never again for this folder. The sandbox is passed in
+            // so the listing hides exactly what the tools would refuse to open.
+            _workspaceBriefText = WorkspaceBriefText.BuildBriefForWorkspaceFolder(workspaceFolderPath, _pathSandbox);
+            LetTheSystemPromptBePinnedAgainWithTheNewBrief();
+
             // Built here and nowhere else, because its constructor reads
             // Application.persistentDataPath, which throws off the main thread - and every caller
             // below this point runs on the thread pool.
@@ -134,7 +163,36 @@ namespace Amberline.Agent
             _toolRegistry.RegisterExecutor(new FinishTool());
 
             _toolRunner = new ToolRunner(_toolRegistry, _approvalGate.RequestApprovalAsync);
-            _agentLoop = new AgentLoop(_llmGateway, _contextManager, _toolRegistry, _toolRunner, _agentEvents);
+            _agentLoop = new AgentLoop(_llmGateway, _contextManager, _toolRegistry, _toolRunner, _agentEvents,
+                _chatTemplateRenderer);
+        }
+
+        // A pinned block that still describes the PREVIOUS folder is worse than no block at all: it
+        // hands the model a listing of files that are no longer reachable. /cd clears the
+        // conversation as well, so nothing in the transcript is left pointing at the old folder.
+        //
+        // Nothing happens before the first pin, because there is no block to replace yet - Awake
+        // builds the tool stack long before the tokenizer is up.
+        void LetTheSystemPromptBePinnedAgainWithTheNewBrief()
+        {
+            if (_pinningOfTheSystemPrompt == null) return;
+
+            _pinningOfTheSystemPrompt =
+                PinTheSystemBlockAfterTheOneAlreadyRunningAsync(_pinningOfTheSystemPrompt, BuildPinnedSystemBlock()).AsTask();
+        }
+
+        // Chained rather than started alongside. Both writes land on the same slot at index 0, and
+        // measuring a prompt with the model's tokenizer takes long enough that the first one could
+        // otherwise finish LAST and put the folder the user just left back into the transcript.
+        async UniTask PinTheSystemBlockAfterTheOneAlreadyRunningAsync(Task pinningAlreadyRunning, string pinnedSystemBlock)
+        {
+            await pinningAlreadyRunning;
+
+            // Everything below waits on frames and calls the tokenizer, and neither is safe off the
+            // player loop - awaiting a Task can resume anywhere.
+            await UniTask.SwitchToMainThread();
+
+            await _contextManager.SetPinnedSystemBlockAsync(pinnedSystemBlock);
         }
 
         // Built here, on the main thread, because it captures the synchronisation context it will
@@ -178,8 +236,8 @@ namespace Amberline.Agent
             return _contextManager.GetContextUsage(usableContextTokens);
         }
 
-        /// <summary>The tools the model can really call this turn - phase allows it and an executor
-        /// exists for it. Backs /tools, and it is the same list the grammar is built from.</summary>
+        /// <summary>The tools the model can really call - the ones an executor exists for. Backs
+        /// /tools, and it is the same list the grammar is built from.</summary>
         public IReadOnlyList<string> GetNamesOfCallableTools()
         {
             return _toolRegistry.GetNamesOfCallableTools();
@@ -214,13 +272,12 @@ namespace Amberline.Agent
         }
 
         /// <summary>
-        /// Backs /clear: drops the conversation but keeps the pinned system block, and puts the
-        /// agent back in the read-only phase, because the next message starts a fresh run.
+        /// Backs /clear: drops the conversation but keeps the pinned system block, because the
+        /// next message starts a fresh run.
         /// </summary>
         public void ClearConversation()
         {
             _contextManager.Clear();
-            _toolRegistry.ResetToExplorePhase();
 
             // "Approve every write_file this session" was granted over a conversation that no
             // longer exists, so it must not carry into the one that replaces it. The same is true
@@ -242,21 +299,44 @@ namespace Amberline.Agent
             await EnsureSystemPromptIsPinnedAsync();
         }
 
-        // M3 is where the real system prompt takes over from the conversational stand-in M2 used:
-        // there is now a loop that executes the tool calls it asks the model to write.
-        //
         // Started at most once. Without the guard, a user who submits during the boot animation
         // would have two callers pass the "not pinned yet" check while the tokenizer was still
         // loading, and the transcript would end up with two system blocks.
         UniTask EnsureSystemPromptIsPinnedAsync()
         {
-            if (!_hasStartedPinningTheSystemPrompt)
+            if (_pinningOfTheSystemPrompt == null)
             {
-                _hasStartedPinningTheSystemPrompt = true;
-                _pinningOfTheSystemPrompt = _contextManager.SetPinnedSystemBlockAsync(SystemPromptText.k_systemPrompt).Preserve();
+                _pinningOfTheSystemPrompt = LearnHowTheModelWantsToBeTalkedToAndPinTheSystemBlockAsync().AsTask();
             }
 
-            return _pinningOfTheSystemPrompt;
+            return _pinningOfTheSystemPrompt.AsUniTask();
+        }
+
+        // The envelope has to be known before the first prompt is rendered, and it can only be
+        // asked for once the model is loaded - so it is learned here, on the same wait the pinning
+        // already pays for. Whether the model has a real reasoning token is settled here too,
+        // because the tokenizer is the only thing that can answer it and only this class holds one.
+        async UniTask LearnHowTheModelWantsToBeTalkedToAndPinTheSystemBlockAsync()
+        {
+            if (_llmGateway != null && await _llmGateway.WaitUntilReadyAsync(CancellationToken.None))
+            {
+                int tokensInTheThinkTag = await _llmGateway.CountTokensAsync(ChatTemplateRenderer.ThinkBlockOpenTag);
+                _chatTemplateRenderer.LearnTheFormatOfTheLoadedModel(tokensInTheThinkTag == 1);
+            }
+
+            await _contextManager.SetPinnedSystemBlockAsync(BuildPinnedSystemBlock());
+        }
+
+        // The fixed rules first, then the folder they apply to. Two halves, one block: the model
+        // reads them as one message, and llama.cpp caches them as one prefix.
+        string BuildPinnedSystemBlock()
+        {
+            if (string.IsNullOrEmpty(_workspaceBriefText))
+            {
+                return SystemPromptText.k_systemPrompt;
+            }
+
+            return SystemPromptText.k_systemPrompt + "\n\n" + _workspaceBriefText;
         }
     }
 }

@@ -73,7 +73,7 @@ namespace Amberline.Agent
             return new FileChangePreview(false, failureMessage, toolName, string.Empty, false, null, string.Empty, null, false);
         }
 
-        /// <summary>One line for the top of the card: "create src/New.cs (+12)".</summary>
+        /// <summary>One line for the top of the card: "create New.cs (+12)".</summary>
         public string BuildHeadline()
         {
             if (!IsAvailable)

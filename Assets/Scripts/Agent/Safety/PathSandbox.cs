@@ -125,7 +125,7 @@ namespace Amberline.Agent
 
             if (!TryCombineWithWorkspaceRoot(cleanedRelativePath, out string candidateFullPath))
             {
-                rejectionReason = "that is not a usable path. Give a plain path relative to the project folder, like src/Player.cs";
+                rejectionReason = "that is not a usable path. Give a plain path relative to the project folder, like Player.cs";
                 return false;
             }
 
@@ -186,7 +186,7 @@ namespace Amberline.Agent
 
             if (ContainsControlCharacter(cleanedRelativePath))
             {
-                rejectionReason = "that path contains control characters. Write the path as plain text, like src/Player.cs";
+                rejectionReason = "that path contains control characters. Write the path as plain text, like Player.cs";
                 return false;
             }
 
@@ -201,13 +201,13 @@ namespace Amberline.Agent
             // One rule catches both a drive letter and an alternate data stream.
             if (cleanedRelativePath.IndexOf(':') >= 0)
             {
-                rejectionReason = "a colon is not allowed in a path, so no drive letters and no data streams. Give a path relative to the project folder, like src/Player.cs";
+                rejectionReason = "a colon is not allowed in a path, so no drive letters and no data streams. Give a path relative to the project folder, like Player.cs";
                 return false;
             }
 
             if (cleanedRelativePath.StartsWith("/", StringComparison.Ordinal) || Path.IsPathRooted(cleanedRelativePath))
             {
-                rejectionReason = "absolute paths are not allowed. Give a path relative to the project folder, like src/Player.cs";
+                rejectionReason = "absolute paths are not allowed. Give a path relative to the project folder, like Player.cs";
                 return false;
             }
 
@@ -328,7 +328,7 @@ namespace Amberline.Agent
             }
             catch (Exception)
             {
-                rejectionReason = "that path could not be checked against the project folder. Give a simple relative path, like src/Player.cs";
+                rejectionReason = "that path could not be checked against the project folder. Give a simple relative path, like Player.cs";
                 return false;
             }
 

@@ -173,16 +173,41 @@ namespace Amberline.Agent
         public string Output { get; }
         public bool WasRejectedByUser { get; }
 
-        ToolResult(bool isSuccess, string output, bool wasRejectedByUser)
+        /// <summary>Workspace-relative path of the file this call changed. Empty when it changed none.</summary>
+        public string ChangedFileDisplayPath { get; }
+
+        /// <summary>
+        /// The change that actually landed on disk, so the terminal can show the same diff the
+        /// approval card would have shown - including in the modes where no card is ever drawn.
+        /// Null for every tool that does not write. This is for the USER: it never reaches the
+        /// model, which only ever sees <see cref="Output"/>.
+        /// </summary>
+        public FileDiff AppliedFileDiff { get; }
+
+        ToolResult(bool isSuccess, string output, bool wasRejectedByUser,
+            string changedFileDisplayPath = null, FileDiff appliedFileDiff = null)
         {
             IsSuccess = isSuccess;
             Output = output ?? string.Empty;
             WasRejectedByUser = wasRejectedByUser;
+            ChangedFileDisplayPath = changedFileDisplayPath ?? string.Empty;
+            AppliedFileDiff = appliedFileDiff;
         }
 
         public static ToolResult Success(string output)
         {
             return new ToolResult(true, output, false);
+        }
+
+        /// <summary>
+        /// A success that also wrote a file. Carries the diff alongside the text so the terminal
+        /// can render what changed; <paramref name="output"/> is unchanged from what the plain
+        /// <see cref="Success"/> would have produced, so the transcript the model reads - and the
+        /// prompt prefix the KV cache is built on - stays byte for byte the same.
+        /// </summary>
+        public static ToolResult SuccessWithFileChange(string output, string changedFileDisplayPath, FileDiff appliedFileDiff)
+        {
+            return new ToolResult(true, output, false, changedFileDisplayPath, appliedFileDiff);
         }
 
         /// <summary>The message is written for the model to read, so it must say what to do next.</summary>

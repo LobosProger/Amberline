@@ -91,6 +91,17 @@
     text-shadow: 0 0 10px var(--amber-overlay-35);
 }
 
+/* Thinking — the model narrating itself. Sits on the tool card shape and dims it
+   one step further: a plan is the quietest thing on screen, below even tool
+   traffic, and it stays folded to one line until it is clicked. */
+
+.line--thinking-text {
+    color: var(--accent-amber-dim);
+    opacity: 0.75;
+    -unity-font-style: normal;
+    text-shadow: 0 0 8px var(--amber-overlay-18);
+}
+
 /* Error — same shape as a tool card but in warning red, so failures are
    impossible to miss against a screen that is otherwise entirely amber. */
 

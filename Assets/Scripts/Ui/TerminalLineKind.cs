@@ -21,6 +21,9 @@ namespace Amberline.Ui
         /// <summary>A tool call and its short result, rendered dimmer than an agent message.</summary>
         ToolActivity,
 
+        /// <summary>The model's plan, kept collapsed to one animated line that expands on a click.</summary>
+        Thinking,
+
         /// <summary>System note that is neither an answer nor a failure - /help output, workspace changes.</summary>
         Notice,
 

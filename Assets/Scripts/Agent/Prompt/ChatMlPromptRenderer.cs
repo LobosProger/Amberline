@@ -3,13 +3,18 @@ using System.Text;
 
 namespace Amberline.Agent
 {
-    // Renders our transcript into the ChatML envelope the Qwen family is trained on.
+    // The ChatML envelope, and the turn merging every envelope needs.
     //
-    // We have to do this ourselves. LLM for Unity v3.0.1 deleted its whole C# ChatTemplate
+    // ChatML is no longer what amberline renders by default - see ChatTemplateRenderer, which asks
+    // the loaded model for its own template and only falls back to this class when there is none
+    // to ask. It stays because that fallback has to exist: a GGUF with no chat template in its
+    // metadata still has to be talked to somehow, and ChatML is the format the largest share of
+    // open instruct models understand.
+    //
+    // We have to render at all because LLM for Unity v3.0.1 deleted its whole C# ChatTemplate
     // hierarchy and moved templating into the native LlamaLib, so LLMClient.Completion(prompt) is
     // raw: the string we pass reaches the model verbatim, with no template, no BOS handling and no
-    // history. Without this class Qwen3 behaves as a plain text continuer and narrates its own
-    // reasoning instead of answering.
+    // history.
     //
     // LOAD-BEARING PROPERTY - do not break it:
     // rendering is a pure function of (messages, assistantPrefill), and the prefill is the very
@@ -29,33 +34,64 @@ namespace Amberline.Agent
 
         /// <summary>
         /// Renders the ordered transcript as ChatML turns and then opens an assistant turn, so the
-        /// model can only continue as the assistant. Consecutive messages with the same role are
-        /// merged into one turn: a small model follows one long user turn better than six short
-        /// ones, and merging saves an envelope's worth of tokens per merged message.
-        /// The prefill is appended raw after the opening of the assistant turn and may be empty.
+        /// model can only continue as the assistant. The prefill is appended raw after the opening
+        /// of the assistant turn and may be empty.
         /// </summary>
         public static string RenderConversationToChatMl(IReadOnlyList<ChatMessage> messages, string assistantPrefill)
         {
+            string renderedConversation = RenderMergedConversationToChatMl(MergeConsecutiveTurnsWithTheSameRole(messages));
+
+            return string.IsNullOrEmpty(assistantPrefill)
+                ? renderedConversation
+                : renderedConversation + assistantPrefill;
+        }
+
+        /// <summary>
+        /// The same thing for messages that have already been merged, so the caller does not pay
+        /// for merging twice when it needed the merged list for something else.
+        /// </summary>
+        public static string RenderMergedConversationToChatMl(IReadOnlyList<ChatMessage> mergedMessages)
+        {
             var renderedPrompt = new StringBuilder();
-            AppendAllTurnsWithSameRoleMerged(renderedPrompt, messages);
-            AppendOpeningOfAssistantTurn(renderedPrompt, assistantPrefill);
+
+            if (mergedMessages != null)
+            {
+                foreach (var message in mergedMessages)
+                {
+                    renderedPrompt.Append(k_turnStartTag).Append(GetRoleName(message.Role)).Append('\n');
+                    renderedPrompt.Append(message.Text);
+                    renderedPrompt.Append(k_turnEndTag).Append('\n');
+                }
+            }
+
+            renderedPrompt.Append(k_turnStartTag).Append(k_assistantRoleName).Append('\n');
             return renderedPrompt.ToString();
         }
 
-        static void AppendAllTurnsWithSameRoleMerged(StringBuilder renderedPrompt, IReadOnlyList<ChatMessage> messages)
+        /// <summary>
+        /// Folds runs of same-role messages into one turn each and drops empty ones. Two reasons,
+        /// and both matter: a small model follows one long user turn better than six short ones,
+        /// and several chat templates - Mistral's among them - are only defined for strictly
+        /// alternating user and assistant turns, so a pair of consecutive user messages renders
+        /// wrong or throws.
+        /// <para>
+        /// The token counts of the merged messages are meaningless and are set to zero. Nothing
+        /// downstream of rendering reads them; the transcript keeps the measured ones.
+        /// </para>
+        /// </summary>
+        public static IReadOnlyList<ChatMessage> MergeConsecutiveTurnsWithTheSameRole(IReadOnlyList<ChatMessage> messages)
         {
+            var mergedMessages = new List<ChatMessage>();
             if (messages == null)
             {
-                return;
+                return mergedMessages;
             }
 
             var textOfCurrentTurn = new StringBuilder();
             ChatRole roleOfCurrentTurn = ChatRole.System;
 
-            for (int messageIndex = 0; messageIndex < messages.Count; messageIndex++)
+            foreach (var message in messages)
             {
-                ChatMessage message = messages[messageIndex];
-
                 // An empty turn teaches the model nothing and still costs the envelope tokens.
                 if (message == null || string.IsNullOrEmpty(message.Text))
                 {
@@ -65,7 +101,7 @@ namespace Amberline.Agent
                 bool isStartOfADifferentRole = textOfCurrentTurn.Length > 0 && message.Role != roleOfCurrentTurn;
                 if (isStartOfADifferentRole)
                 {
-                    AppendOneTurn(renderedPrompt, roleOfCurrentTurn, textOfCurrentTurn);
+                    mergedMessages.Add(new ChatMessage(roleOfCurrentTurn, textOfCurrentTurn.ToString(), 0));
                     textOfCurrentTurn.Clear();
                 }
 
@@ -79,22 +115,17 @@ namespace Amberline.Agent
                 textOfCurrentTurn.Append(message.Text);
             }
 
-            AppendOneTurn(renderedPrompt, roleOfCurrentTurn, textOfCurrentTurn);
-        }
-
-        static void AppendOneTurn(StringBuilder renderedPrompt, ChatRole role, StringBuilder textOfTurn)
-        {
-            if (textOfTurn.Length == 0)
+            if (textOfCurrentTurn.Length > 0)
             {
-                return;
+                mergedMessages.Add(new ChatMessage(roleOfCurrentTurn, textOfCurrentTurn.ToString(), 0));
             }
 
-            renderedPrompt.Append(k_turnStartTag).Append(GetRoleName(role)).Append('\n');
-            renderedPrompt.Append(textOfTurn);
-            renderedPrompt.Append(k_turnEndTag).Append('\n');
+            return mergedMessages;
         }
 
-        static string GetRoleName(ChatRole role)
+        /// <summary>The wire name of a role. Public because the gateway needs the same spelling
+        /// when it hands the messages to the model's own template.</summary>
+        public static string GetRoleName(ChatRole role)
         {
             if (role == ChatRole.System)
             {
@@ -107,16 +138,6 @@ namespace Amberline.Agent
             }
 
             return k_assistantRoleName;
-        }
-
-        static void AppendOpeningOfAssistantTurn(StringBuilder renderedPrompt, string assistantPrefill)
-        {
-            renderedPrompt.Append(k_turnStartTag).Append(k_assistantRoleName).Append('\n');
-
-            if (!string.IsNullOrEmpty(assistantPrefill))
-            {
-                renderedPrompt.Append(assistantPrefill);
-            }
         }
     }
 }

@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Cysharp.Threading.Tasks;
 using LLMUnity;
+using Newtonsoft.Json.Linq;
 using UnityEngine;
 using Stopwatch = System.Diagnostics.Stopwatch;
 #if UNITY_EDITOR
@@ -23,6 +24,19 @@ namespace Amberline.Agent
 		public float? TopP { get; set; }
 		public int? TopK { get; set; }
 		public int? Seed { get; set; }
+
+		/// <summary>
+		/// The repetition penalty. It has to be settable per call, and the reason is code: source
+		/// repeats itself constantly - the same indentation, the same "self.", the same closing
+		/// brace - and a penalty tuned for chat quietly pushes the model off the token it should
+		/// have written. The pass that emits a file payload sets this to 1, which is off.
+		/// </summary>
+		public float? RepeatPenalty { get; set; }
+
+		/// <summary>The minimum probability a token needs to stay in the running. Zero disables it,
+		/// which is what a grammar-constrained pass wants: the grammar has already decided which
+		/// tokens are legal, and a second filter on top of it can only remove legal ones.</summary>
+		public float? MinP { get; set; }
 	}
 
 	// The only class in the project allowed to reference the LLMUnity namespace. Everything above it
@@ -79,6 +93,9 @@ namespace Amberline.Agent
 		const int k_framesBetweenReadinessProbes = 2;
 		const int k_readinessProbeAttempts = 3;
 		const string k_readinessProbeText = "ready";
+
+		// Every native build whose name says it offloads to a GPU. Anything else is CPU only.
+		static readonly string[] k_namesOfNativeBuildsThatUseTheGpu = { "cublas", "tinyblas", "vulkan", "metal", "hip", "sycl" };
 
 		/// <summary>True while a completion is running. A second concurrent call is refused.</summary>
 		public bool IsCompletionInProgress => _isCompletionInProgress;
@@ -158,6 +175,12 @@ namespace Amberline.Agent
 			await UniTask.DelayFrame(k_framesToWaitAfterModelStarted);
 
 			_isModelReady = await TryProbeNativeClientAsync();
+
+			if (_isModelReady)
+			{
+				ReportWhichNativeLibraryIsInUse();
+			}
+
 			return _isModelReady;
 		}
 
@@ -250,6 +273,80 @@ namespace Amberline.Agent
 				Debug.LogWarning($"[LlmGateway] Tokenizing failed: {exception.GetType().Name}: {exception.Message}");
 				return 0;
 			}
+		}
+
+		/// <summary>
+		/// Renders <paramref name="messages"/> with the chat template the loaded MODEL FILE shipped
+		/// with, and opens an assistant turn at the end of it. That template - not ChatML, not
+		/// anything this project decided - is the envelope the model was actually trained on.
+		/// Returns null when there is no template to ask, and the caller then falls back to ChatML.
+		/// <para>
+		/// The roles must already alternate. Several templates, Mistral's included, are undefined
+		/// for two user turns in a row, so merge before calling this.
+		/// </para>
+		/// </summary>
+		public string ApplyTheModelsOwnChatTemplate(IReadOnlyList<ChatMessage> messages)
+		{
+			if (messages == null || messages.Count == 0)
+			{
+				return null;
+			}
+
+			var llmService = _llmClient == null || _llmClient.llm == null ? null : _llmClient.llm.llmService;
+			if (llmService == null)
+			{
+				return null;
+			}
+
+			var messagesForTheTemplate = new JArray();
+			foreach (var message in messages)
+			{
+				messagesForTheTemplate.Add(new JObject
+				{
+					["role"] = ChatMlPromptRenderer.GetRoleName(message.Role),
+					["content"] = message.Text
+				});
+			}
+
+			// Deliberately not wrapped in a try: the caller has the fallback and needs to see the
+			// exception text to report which model could not be templated.
+			return llmService.ApplyTemplate(messagesForTheTemplate);
+		}
+
+		// Which native library actually got loaded, so "the agent is unusably slow" is never a
+		// mystery. LlamaLib picks one at startup and falls back on its own, and a fallback all the
+		// way down to a plain CPU build is silent: numGPULayers stays at whatever the inspector
+		// says while nothing is offloaded at all. On this machine that was the difference between
+		// a few tokens a second and a usable agent.
+		void ReportWhichNativeLibraryIsInUse()
+		{
+			string architecture = _llmClient == null || _llmClient.llm == null ? null : _llmClient.llm.architecture;
+
+			if (string.IsNullOrEmpty(architecture))
+			{
+				return;
+			}
+
+			if (IsAnArchitectureThatUsesTheGpu(architecture))
+			{
+				Debug.Log($"[LlmGateway] Inference runs on {architecture}.");
+				return;
+			}
+
+			Debug.LogWarning($"[LlmGateway] Inference runs on {architecture}, which is a CPU build - every layer is on the processor however high numGPULayers is set. On a machine with a supported GPU this is roughly ten times slower than it needs to be. Check the LLM component's GPU settings and that the matching native library is present.");
+		}
+
+		static bool IsAnArchitectureThatUsesTheGpu(string architecture)
+		{
+			foreach (string nameOfAGpuBuild in k_namesOfNativeBuildsThatUseTheGpu)
+			{
+				if (architecture.IndexOf(nameOfAGpuBuild, StringComparison.OrdinalIgnoreCase) >= 0)
+				{
+					return true;
+				}
+			}
+
+			return false;
 		}
 
 		void SubscribeToShutdownEvents()
@@ -469,7 +566,9 @@ namespace Amberline.Agent
 				Temperature = _llmClient.temperature,
 				TopP = _llmClient.topP,
 				TopK = _llmClient.topK,
-				Seed = _llmClient.seed
+				Seed = _llmClient.seed,
+				RepeatPenalty = _llmClient.repeatPenalty,
+				MinP = _llmClient.minP
 			};
 		}
 
@@ -505,6 +604,16 @@ namespace Amberline.Agent
 			if (sampling.Seed.HasValue)
 			{
 				_llmClient.seed = sampling.Seed.Value;
+			}
+
+			if (sampling.RepeatPenalty.HasValue)
+			{
+				_llmClient.repeatPenalty = sampling.RepeatPenalty.Value;
+			}
+
+			if (sampling.MinP.HasValue)
+			{
+				_llmClient.minP = sampling.MinP.Value;
 			}
 		}
 

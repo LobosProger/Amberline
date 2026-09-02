@@ -30,9 +30,11 @@ namespace Amberline.Agent
     //    file over a good one. The parser cannot make this call because it does not know which
     //    tools mutate; this class does.
     //
-    // 2. MUTATING AND COMMAND CALLS PASS THE APPROVAL GATE FIRST. The gate itself is a later
-    //    milestone, so it arrives as an injected delegate. A null delegate means "read-only tools
-    //    only" and every mutating call is refused with a message saying so.
+    // 2. MUTATING AND COMMAND CALLS PASS THE APPROVAL GATE FIRST. It arrives as an injected
+    //    delegate. A null delegate means "read-only tools only" and every mutating call is refused
+    //    with a message saying so. This is now the ONLY thing standing between the model and the
+    //    file system - the two-phase tool gate that used to sit in front of it is gone, see
+    //    ToolRegistry for what it cost.
     public class ToolRunner
     {
         readonly ToolRegistry _toolRegistry;
@@ -89,9 +91,7 @@ namespace Amberline.Agent
 
             cancellationToken.ThrowIfCancellationRequested();
 
-            var toolResult = await ExecuteAndTurnToolFailuresIntoResultsAsync(toolExecutor, toolCall, cancellationToken);
-            UnlockEditPhaseWhenAnyReadOnlyToolSucceeded(toolDefinition, toolResult);
-            return toolResult;
+            return await ExecuteAndTurnToolFailuresIntoResultsAsync(toolExecutor, toolCall, cancellationToken);
         }
 
         // The parse failure text already says what went wrong; this only makes sure the model is
@@ -112,12 +112,6 @@ namespace Amberline.Agent
             if (unknownNameRefusal != null)
             {
                 return unknownNameRefusal;
-            }
-
-            var lockedPhaseRefusal = BuildRefusalWhenToolIsLockedByPhase(toolCall);
-            if (lockedPhaseRefusal != null)
-            {
-                return lockedPhaseRefusal;
             }
 
             var missingExecutorRefusal = BuildRefusalWhenExecutorIsMissing(toolCall, toolExecutor);
@@ -144,21 +138,6 @@ namespace Amberline.Agent
 
             string requestedName = string.IsNullOrEmpty(toolCall.ToolName) ? "(empty)" : toolCall.ToolName;
             return ToolResult.Failure($"there is no tool called '{requestedName}'. Use one of: {DescribeCallableToolNames()}.");
-        }
-
-        ToolResult BuildRefusalWhenToolIsLockedByPhase(ToolCall toolCall)
-        {
-            if (_toolRegistry.IsToolNameAllowedInCurrentPhase(toolCall.ToolName))
-            {
-                return null;
-            }
-
-            // Recoverable on purpose: the message names the exact move that opens the phase, so the
-            // model can reach the tool it wanted on the very next turn.
-            return ToolResult.Failure(
-                $"{toolCall.ToolName} is not available yet. Look at the project first with " +
-                $"{ToolRegistry.k_listDirToolName}, {ToolRegistry.k_grepToolName} or {ToolRegistry.k_readFileToolName}, " +
-                $"and then {toolCall.ToolName} becomes available. Right now you can use: {DescribeCallableToolNames()}.");
         }
 
         ToolResult BuildRefusalWhenExecutorIsMissing(ToolCall toolCall, IToolExecutor toolExecutor)
@@ -195,6 +174,11 @@ namespace Amberline.Agent
 
             foreach (string parameterName in toolDefinition.ParameterNames)
             {
+                if (toolDefinition.CanRunWithout(parameterName))
+                {
+                    continue;
+                }
+
                 if (!toolCall.Arguments.TryGetValue(parameterName, out var argumentValue) || argumentValue == null)
                 {
                     missingParameterNames.Add(parameterName);
@@ -214,8 +198,8 @@ namespace Amberline.Agent
                 $"Missing: {missingNames}. Send the call again with every argument filled in.");
         }
 
-        // Shared by the two refusals above. Names only the tools that can really run right now, so
-        // the model is never pointed at something the current phase or the current build lacks.
+        // Shared by the refusals above. Names only the tools that can really run right now, so the
+        // model is never pointed at something this build has no executor for.
         string DescribeCallableToolNames()
         {
             var callableNames = _toolRegistry.GetNamesOfCallableTools();
@@ -360,29 +344,6 @@ namespace Amberline.Agent
                 Debug.LogWarning($"[ToolRunner] {toolCall.ToolName} threw: {exception}");
                 return ToolResult.Failure($"{toolCall.ToolName} failed with {exception.GetType().Name}: {exception.Message}");
             }
-        }
-
-        // The Edit phase opens after ANY successful read-only tool and never closes again, so grep
-        // and list_dir stay callable for the whole run.
-        //
-        // Not read_file alone, which is what this used to require. An agent asked to CREATE a file
-        // has nothing to read first: it lists the folder, greps for a pattern, finds nothing to
-        // read, and can then never reach write_file. That stranded the whole "create X" class of
-        // tasks behind a gate meant only to stop blind edits. Looking at the folder is evidence
-        // enough that the agent knows where it is.
-        void UnlockEditPhaseWhenAnyReadOnlyToolSucceeded(ToolDefinition toolDefinition, ToolResult toolResult)
-        {
-            if (!toolResult.IsSuccess)
-            {
-                return;
-            }
-
-            if (toolDefinition.IsMutating || toolDefinition.IsCommand)
-            {
-                return;
-            }
-
-            _toolRegistry.UnlockEditPhase();
         }
     }
 }

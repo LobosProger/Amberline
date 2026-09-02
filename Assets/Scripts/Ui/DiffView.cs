@@ -11,9 +11,10 @@ namespace Amberline.Ui
     /// phosphor green, removed in red, unchanged in dim amber, each with its line number in a
     /// gutter. Holds no state; it turns a list of <see cref="DiffLine"/> into visual elements.
     /// <para>
-    /// Two ways in, because a diff is shown in two places. <see cref="AppendDiffToLog"/> puts one
-    /// in the scrolling terminal log, which backs /diff. <see cref="BuildDiffElement"/> hands the
-    /// block back unattached so <see cref="ApprovalCardView"/> can put it inside a card.
+    /// One way in: <see cref="BuildDiffElement"/> hands the block back unattached, and the caller
+    /// decides where it goes - inside an approval card, or into the scrolling log through
+    /// <c>TerminalView.AppendElementToLog</c>, which is what keeps it inside the log's budget.
+    /// This class deliberately does not attach anything itself.
     /// </para>
     /// <para>
     /// The rows it renders are <see cref="Amberline.Agent.DiffLine"/> exactly as the differ built
@@ -27,8 +28,6 @@ namespace Amberline.Ui
         [SerializeField] VisualTreeAsset _diffBlockTemplate;
         [SerializeField] VisualTreeAsset _diffRowTemplate;
 
-        VisualElement _terminalContent;
-
         // A whole-file rewrite is a legitimate change and the model will ask for one. Dropping a
         // thousand rows into the log would bury the run it is meant to explain, and every one of
         // them is a laid-out element for the rest of the session, so the tail is summarised.
@@ -38,7 +37,6 @@ namespace Amberline.Ui
         // push the horizontal extent of the whole log out with it.
         const int k_maximumCharactersOnOneDiffRow = 200;
 
-        const string k_terminalContentElementName = "terminal-content";
         const string k_diffHeaderElementName = "diff-block__header";
         const string k_diffRowsElementName = "diff-block__rows";
         const string k_diffRowNumberElementName = "diff-row__number";
@@ -52,26 +50,6 @@ namespace Amberline.Ui
         const string k_addedRowMarker = "+ ";
         const string k_removedRowMarker = "- ";
         const string k_contextRowMarker = "  ";
-
-        void OnEnable()
-        {
-            _terminalContent = GetComponent<UIDocument>().rootVisualElement.Q<VisualElement>(k_terminalContentElementName);
-        }
-
-        /// <summary>
-        /// Appends a diff block to the scrolling log. The header is usually the workspace-relative
-        /// path the change applies to.
-        /// </summary>
-        public void AppendDiffToLog(string headerText, IReadOnlyList<DiffLine> diffLines)
-        {
-            if (_terminalContent == null)
-            {
-                Debug.LogWarning("[DiffView] There is no terminal content element, so the diff was not shown.");
-                return;
-            }
-
-            _terminalContent.Add(BuildDiffElement(headerText, diffLines));
-        }
 
         /// <summary>
         /// Builds the block without attaching it anywhere, so a caller can place it inside its own

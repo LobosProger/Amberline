@@ -34,7 +34,7 @@ namespace Amberline.Ui
 
         // A long session would otherwise keep thousands of live elements laid out at all times.
         // Note this counts entries, not wrapped text lines: one entry holding a large diff still
-        // counts as one. That is fine while nothing renders diffs; revisit when DiffView lands.
+        // counts as one. DiffView caps its own rows, so one diff block is one bounded entry.
         const int k_maxAppendedLineContainers = 400;
         const float k_defaultCharacterDelaySeconds = 0.012f;
         const string k_textElementName = "text";
@@ -95,6 +95,40 @@ namespace Amberline.Ui
             return lineLabel;
         }
 
+        /// <summary>
+        /// Appends an element the caller built for itself - today, a diff block from
+        /// <see cref="DiffView"/>. Goes through the same budget as an ordinary line, so a session
+        /// that writes a hundred files cannot pile up a hundred blocks the trim never looks at.
+        /// </summary>
+        public void AppendElementToLog(VisualElement elementToAppend)
+        {
+            if (_terminalContent == null || elementToAppend == null) return;
+
+            _terminalContent.Add(elementToAppend);
+            _appendedLineContainers.Add(elementToAppend);
+
+            RemoveOldestLinesOverBudget();
+        }
+
+        /// <summary>
+        /// Removes the whole line that <paramref name="lineLabel"/> belongs to - the instantiated
+        /// template, not just the label inside it. Backs the thought block that turns out to be
+        /// empty: removing the label alone would leave the card's border on screen around nothing.
+        /// </summary>
+        public void RemoveLineContainingLabel(Label lineLabel)
+        {
+            if (lineLabel == null) return;
+
+            for (int lineIndex = 0; lineIndex < _appendedLineContainers.Count; lineIndex++)
+            {
+                if (!_appendedLineContainers[lineIndex].Contains(lineLabel)) continue;
+
+                _appendedLineContainers[lineIndex].RemoveFromHierarchy();
+                _appendedLineContainers.RemoveAt(lineIndex);
+                return;
+            }
+        }
+
         /// <summary>Removes every line from the log. Backs the /clear command.</summary>
         public void ClearAllLines()
         {
@@ -127,6 +161,11 @@ namespace Amberline.Ui
                 TerminalLineKind.UserCommand  => _commandEchoTemplate,
                 TerminalLineKind.AgentMessage => _responseBoxTemplate,
                 TerminalLineKind.ToolActivity => _toolCardTemplate,
+
+                // Same template as a tool card on purpose: a thought is the same weight of
+                // information as a tool call, and reusing it keeps the scene free of another
+                // template reference to wire up. The controller adds its own USS class on top.
+                TerminalLineKind.Thinking     => _toolCardTemplate,
                 TerminalLineKind.Notice       => _bootLineTemplate,
                 TerminalLineKind.Error        => _errorBoxTemplate,
                 _ => _bootLineTemplate

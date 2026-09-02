@@ -16,19 +16,16 @@ namespace Amberline.Agent
     //    to sit. Folding it in means nothing already in the transcript is ever rewritten.
     //
     // 2. The ACT prompt is the THINK prompt plus MORE ASSISTANT PREFILL - never a different
-    //    transcript and never a rewritten turn. See ChatMlPromptRenderer for why that is what
+    //    transcript and never a rewritten turn. See ChatTemplateRenderer for why that is what
     //    keeps the prompt cache alive across the two passes of one turn.
-    public static class PromptBuilder
+    //
+    // It is an instance rather than a static class because both of the reasoning tricks below only
+    // apply to a model that HAS reasoning tokens. Written unconditionally, as they were, they put
+    // "<think></think>" and "/no_think" in front of a Mistral that has never seen either - a
+    // handful of wasted tokens per message, and a tag the model may well start imitating.
+    public class PromptBuilder
     {
-        /// <summary>Opens the assistant turn for the THINK pass, so the model writes a short plan
-        /// before it writes JSON. The ACT prefill always starts with this exact text.
-        /// <para>
-        /// It leads with an ALREADY CLOSED think block. Reasoning parsing is off in the LLM
-        /// component, so a &lt;think&gt; block Qwen3 emits lands verbatim in the completion text;
-        /// closing one for it up front makes it start on the plan instead. Measured in M2: without
-        /// the block the completion began with a think tag and "Okay, the user is asking".
-        /// </para></summary>
-        public const string k_thoughtPrefill = "<think>\n\n</think>\n\nThought:";
+        readonly ChatTemplateRenderer _chatTemplateRenderer;
 
         /// <summary>Default opening for the ACT pass. The grammar builder may supply its own
         /// prefill instead, and the two must be produced together: llama.cpp starts grammar
@@ -39,6 +36,16 @@ namespace Amberline.Agent
         const string k_toolResponseOpenTag = "<tool_response>";
         const string k_toolResponseCloseTag = "</tool_response>";
 
+        // The plain half of the THINK prefill: it opens the assistant turn with the word that makes
+        // the model write a short plan instead of an answer to the user.
+        const string k_thoughtOpening = "Thought:";
+
+        // The other half, and only for a model with reasoning tokens. Reasoning parsing is off in
+        // the LLM component, so a <think> block the model opens lands verbatim in the completion
+        // text; closing one for it up front makes it start on the plan instead. Measured in M2:
+        // without the block the completion began with a think tag and "Okay, the user is asking".
+        const string k_closedThinkBlockBeforeTheThought = "<think>\n\n</think>\n\n";
+
         // Byte-identical on every single use. If this ever varied per turn, each tool result would
         // push a different string into the transcript and the prompt cache would miss right there.
         // It restates the SHAPE and the one-call-per-turn rule only. It deliberately says nothing
@@ -47,15 +54,11 @@ namespace Amberline.Agent
         const string k_formatReminder =
             "[format] Next, exactly one <tool_call>{\"name\": ..., \"arguments\": {...}}</tool_call>, or call finish.";
 
-        // Qwen3 reasoning parsing is off in the LLM component, so any <think> block the model emits
-        // is not stripped out - it lands inline in the completion text. This marker suppresses it.
-        //
-        // The previous agent put "/no_think" at the end of its SYSTEM prompt, which was very likely
-        // a no-op: Qwen3 was trained to look for the marker in the LAST USER message, not in the
-        // system message. So we append it to every user-role turn we create instead. Appending it
-        // at creation time (rather than patching the newest user turn at render time) keeps the
-        // transcript append-only, which rule 1 above depends on. The price is that the marker
-        // repeats inside a merged user turn - a few tokens, paid to never rewrite a turn.
+        // Qwen3 was trained to look for this marker in the LAST USER message, not in the system
+        // message, so it is appended to every user-role turn we create. Appending it at creation
+        // time (rather than patching the newest user turn at render time) keeps the transcript
+        // append-only, which rule 1 above depends on. The price is that the marker repeats inside
+        // a merged user turn - a few tokens, paid to never rewrite a turn.
         const string k_noThinkMarker = "/no_think";
 
         const string k_summaryRequest =
@@ -63,16 +66,30 @@ namespace Amberline.Agent
             "TASK:\nFILES TOUCHED:\nDECISIONS:\nCURRENT STEP:\nNEXT STEP:\n" +
             "Write no tool call.";
 
-        /// <summary>Wraps what the user typed into the user-turn text that enters the transcript.</summary>
-        public static string BuildTaskMessageText(string userTaskText)
+        public PromptBuilder(ChatTemplateRenderer chatTemplateRenderer)
         {
-            return $"{userTaskText}\n{k_noThinkMarker}";
+            _chatTemplateRenderer = chatTemplateRenderer;
+        }
+
+        /// <summary>
+        /// Opens the assistant turn for the THINK pass, so the model writes a short plan before it
+        /// writes JSON. The ACT prefill always starts with this exact text.
+        /// </summary>
+        public string ThoughtPrefill =>
+            _chatTemplateRenderer.DoesTheModelThinkInTags
+                ? k_closedThinkBlockBeforeTheThought + k_thoughtOpening
+                : k_thoughtOpening;
+
+        /// <summary>Wraps what the user typed into the user-turn text that enters the transcript.</summary>
+        public string BuildTaskMessageText(string userTaskText)
+        {
+            return AppendTheNoThinkMarkerWhenTheModelUnderstandsIt(userTaskText);
         }
 
         /// <summary>THINK pass: let the model reason in plain text for a few tokens, unconstrained.</summary>
-        public static string BuildThinkPrompt(IReadOnlyList<ChatMessage> transcript)
+        public string BuildThinkPrompt(IReadOnlyList<ChatMessage> transcript)
         {
-            return ChatMlPromptRenderer.RenderConversationToChatMl(transcript, k_thoughtPrefill);
+            return _chatTemplateRenderer.Render(transcript, ThoughtPrefill);
         }
 
         /// <summary>
@@ -81,11 +98,11 @@ namespace Amberline.Agent
         /// error when retrying a turn, and null otherwise. Pass the grammar's own prefill when
         /// there is one, and null to use the default.
         /// </summary>
-        public static string BuildActPrompt(IReadOnlyList<ChatMessage> transcript, string thoughtText,
+        public string BuildActPrompt(IReadOnlyList<ChatMessage> transcript, string thoughtText,
             string previousParseError, string toolCallPrefill)
         {
             string actPrefill = BuildActPrefill(thoughtText, previousParseError, toolCallPrefill);
-            return ChatMlPromptRenderer.RenderConversationToChatMl(transcript, actPrefill);
+            return _chatTemplateRenderer.Render(transcript, actPrefill);
         }
 
         /// <summary>
@@ -94,19 +111,19 @@ namespace Amberline.Agent
         /// text, or the next prompt would not extend this one and the KV cache would be thrown away
         /// at that turn. Same arguments as <see cref="BuildActPrompt"/>, so the two cannot drift.
         /// </summary>
-        public static string BuildActPrefill(string thoughtText, string previousParseError, string toolCallPrefill)
+        public string BuildActPrefill(string thoughtText, string previousParseError, string toolCallPrefill)
         {
             return BuildActPrefillThatExtendsThinkPrefill(thoughtText, previousParseError, toolCallPrefill);
         }
 
         // The returned string ALWAYS starts with the exact prefill the THINK pass used, which is
         // what makes the ACT prompt a byte-exact prefix extension of the THINK prompt. Anything
-        // added here must be APPENDED - inserting in front of k_thoughtPrefill silently costs a
+        // added here must be APPENDED - inserting in front of the thought prefill silently costs a
         // full prompt re-read on every turn.
-        static string BuildActPrefillThatExtendsThinkPrefill(string thoughtText, string previousParseError,
+        string BuildActPrefillThatExtendsThinkPrefill(string thoughtText, string previousParseError,
             string toolCallPrefill)
         {
-            var actPrefill = new StringBuilder(k_thoughtPrefill);
+            var actPrefill = new StringBuilder(ThoughtPrefill);
 
             if (!string.IsNullOrEmpty(thoughtText))
             {
@@ -129,27 +146,35 @@ namespace Amberline.Agent
         /// <summary>
         /// Wraps one tool result into the user-turn text that enters the transcript, with the
         /// format reminder on its tail. Results come back as user turns rather than a tool role,
-        /// because we render ChatML ourselves and an arbitrary GGUF template may not know a tool
-        /// role at all. Truncate the output before calling this - it goes into history as is.
+        /// because we render the conversation ourselves and an arbitrary GGUF template may not know
+        /// a tool role at all. Truncate the output before calling this - it goes into history as is.
         /// </summary>
-        public static string BuildToolResultMessageText(string toolOutputText)
+        public string BuildToolResultMessageText(string toolOutputText)
         {
-            return $"{k_toolResponseOpenTag}\n{toolOutputText}\n{k_toolResponseCloseTag}\n{k_formatReminder}\n{k_noThinkMarker}";
+            string toolResponseText = $"{k_toolResponseOpenTag}\n{toolOutputText}\n{k_toolResponseCloseTag}\n{k_formatReminder}";
+            return AppendTheNoThinkMarkerWhenTheModelUnderstandsIt(toolResponseText);
         }
 
         /// <summary>
         /// SUMMARISE pass, used by /compact. This one is a throwaway generation rather than part of
         /// the turn chain, so it may append a request turn that never enters the transcript.
         /// </summary>
-        public static string BuildSummarisePrompt(IReadOnlyList<ChatMessage> transcript)
+        public string BuildSummarisePrompt(IReadOnlyList<ChatMessage> transcript)
         {
             var transcriptWithSummaryRequest = new List<ChatMessage>(transcript);
-            string summaryRequestText = $"{k_summaryRequest}\n{k_noThinkMarker}";
+            string summaryRequestText = AppendTheNoThinkMarkerWhenTheModelUnderstandsIt(k_summaryRequest);
 
             // Token count zero: this message is never stored, so nothing ever reads the count.
             transcriptWithSummaryRequest.Add(new ChatMessage(ChatRole.User, summaryRequestText, 0));
 
-            return ChatMlPromptRenderer.RenderConversationToChatMl(transcriptWithSummaryRequest, string.Empty);
+            return _chatTemplateRenderer.Render(transcriptWithSummaryRequest, string.Empty);
+        }
+
+        string AppendTheNoThinkMarkerWhenTheModelUnderstandsIt(string userTurnText)
+        {
+            return _chatTemplateRenderer.DoesTheModelThinkInTags
+                ? $"{userTurnText}\n{k_noThinkMarker}"
+                : userTurnText;
         }
     }
 }
