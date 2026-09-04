@@ -13,7 +13,15 @@
   <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green">
 </p>
 
-![The terminal, just booted](docs/media/boot.png)
+> *"create tools/wordcount.py that opens the file named in sys.argv[1] and prints how many words it contains"*
+
+![The agent reading the task, writing the file, and waiting for approval before it touches the disk](docs/media/writes-a-script.gif)
+
+<p align="center">
+  <sub><b>Real speed, nothing sped up.</b> You type a task in plain English; it thinks, writes the file,
+  shows you exactly what it wants to put on disk — and waits for a keypress. Six seconds, start to
+  finish, with the model running on the graphics card in that machine and nothing leaving it.</sub>
+</p>
 
 ---
 
@@ -40,19 +48,10 @@ you get a coding assistant.
 
 ## See it work
 
-Three recordings from one session. Real speed, nothing sped up, nothing staged — a
+Two more clips from the same session, on the same terms — nothing sped up, nothing staged. A
 4-billion-parameter model on one consumer graphics card, working in a small throwaway project.
 
-### 1 · It writes code
-
-> *"create tools/wordcount.py that opens the file named in sys.argv[1] and prints how many words it contains"*
-
-![The agent writing a new file and waiting for approval](docs/media/writes-a-script.gif)
-
-It thinks, decides to create a file, and then shows you **exactly** what it wants to put on disk —
-new lines in green — and waits. One keypress and the file exists. Six seconds, start to finish.
-
-### 2 · It uses the terminal, and commits its own work
+### 1 · It uses the terminal, and commits its own work
 
 > *"now add tools/wordcount.py to git and commit it with a short message"*
 
@@ -62,7 +61,7 @@ Nobody told it which command to run. It chose `git add … && git commit -m "Add
 asked permission, streamed the output live as it ran, read the result — `1 file changed, 6
 insertions(+)` — and reported back. The commit message is its own.
 
-### 3 · It takes "no" for an answer
+### 2 · It takes "no" for an answer
 
 > *"delete data/sample.txt, we do not need it any more"*
 
@@ -401,7 +400,9 @@ Please read this before the setup section, not after.
    **Point it at a throwaway project the first time.** The sandbox will stop it leaving the folder;
    nothing stops it being wrong *inside* the folder except you.
 
-6. **Open `Assets/Scenes/SampleScene.unity` and press Play.**
+6. **Open `Assets/Scenes/SampleScene.unity` and press Play.** This is what you get:
+
+![The terminal, just booted](docs/media/boot.png)
 
 `Run In Background` is already enabled in the project settings and needs to stay that way — see the
 notes above for what happens otherwise.
