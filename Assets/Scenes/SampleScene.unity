@@ -595,7 +595,7 @@ MonoBehaviour:
   _approvalCardView: {fileID: 678050298}
   _diffView: {fileID: 678050299}
   _agentRunner: {fileID: 1667713382}
-  _workspaceFolderPath: C:/UnityProjects/Sentis code cli
+  _workspaceFolderPath: 
   _shouldRememberTheWorkspaceFolderBetweenSessions: 1
 --- !u!114 &678050289
 MonoBehaviour:
