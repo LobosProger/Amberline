@@ -109,6 +109,12 @@ namespace Amberline.Agent
 		// than a number on screen can be read, and a label rewritten thirty times a second is a blur.
 		const int k_millisecondsBetweenSpeedReports = 250;
 
+		// The decoding clock starts AT the first token, so the very report that delivers that token
+		// measures a window of almost nothing, and one token divided by almost nothing reached the
+		// status bar as "6452776 tok/s". Nothing true can be said about a rate until the window is
+		// wide enough to divide by, so below this no reading is sent and the last one stays up.
+		const float k_shortestDecodingWindowWorthAReading = 0.2f;
+
 		// Every native build whose name says it offloads to a GPU. Anything else is CPU only.
 		static readonly string[] k_namesOfNativeBuildsThatUseTheGpu = { "cublas", "tinyblas", "vulkan", "metal", "hip", "sycl" };
 
@@ -713,7 +719,10 @@ namespace Amberline.Agent
 
 			int tokensGenerated = _tokensGeneratedInThisCall;
 			float secondsSpentDecoding = (float)stopwatchOfThisCall.Elapsed.TotalSeconds - _secondsToFirstTokenOfThisCall;
-			float tokensPerSecond = secondsSpentDecoding > 0f ? tokensGenerated / secondsSpentDecoding : 0f;
+
+			if (secondsSpentDecoding < k_shortestDecodingWindowWorthAReading) return;
+
+			float tokensPerSecond = tokensGenerated / secondsSpentDecoding;
 
 			RaiseGenerationStats(new LlmGenerationStats(tokensGenerated, tokensPerSecond, _secondsToFirstTokenOfThisCall));
 		}
