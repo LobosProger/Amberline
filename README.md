@@ -2,7 +2,7 @@
 
 <p align="center">
   <b>A coding agent that runs entirely on your own computer</b><br>
-  — inside a Unity window that looks like a 1980s amber terminal.
+  — at runtime inside Unity, in a terminal styled after a 1980s amber CRT.
 </p>
 
 <p align="center">
@@ -36,24 +36,25 @@ The part that makes it unusual: the AI is not in the cloud. There is no API key 
 project, no account, no subscription, and no bill. The model is a file on the disk, and it runs on
 the graphics card in the machine. Unplug the network and it keeps working.
 
-The part that makes it fun: the whole thing lives in a **game engine**. The terminal is real Unity
-UI, rendered to a texture and pushed through a CRT shader — scanlines, glow, the lot. Press Play and
-you get a coding assistant.
+The part that makes it fun: the whole thing lives in a **game engine** — and not as an editor
+plugin. It runs at runtime, in Play mode, like any other Unity app. The terminal is real Unity UI,
+rendered to a texture and pushed through a CRT shader: scanlines, glow, the lot. Press Play and you
+have a coding assistant.
 
 > I built it after months of using [Claude Code](https://claude.com/claude-code), because I wanted to
 > know what is actually inside one of these things — and whether Unity, which everyone thinks of as a
 > tool for making games, could host a serious developer tool. It can.
 
-It is a **small** agent, on purpose. Nine tools, one folder, one conversation at a time. The
-extension machinery that makes a hosted assistant like Claude Code a platform — MCP servers, skills,
-subagents, hooks, plugins — is not here, and is not pretended to be. What is here is the loop
-itself: plan, call a tool, read the result, ask before touching anything, repeat.
+It is a **small** agent. Nine tools, one folder, one conversation at a time. There is no MCP, no
+skills, no subagents, no hooks and no plugin system — the parts that make a hosted assistant like
+Claude Code extensible are simply not there. What is left is the loop: plan, call a tool, read the
+result, ask before touching anything, repeat.
 
 ---
 
 ## See it work
 
-Two more clips from the same session, on the same terms — nothing sped up, nothing staged. A
+Two more clips from the same session, recorded the same way — nothing sped up. A
 4-billion-parameter model on one consumer graphics card, working in a small throwaway project.
 
 ### 1 · It uses the terminal, and commits its own work
@@ -64,7 +65,7 @@ Two more clips from the same session, on the same terms — nothing sped up, not
 
 Nobody told it which command to run. It chose `git add … && git commit -m "Add word count tool"`,
 asked permission, streamed the output live as it ran, read the result — `1 file changed, 6
-insertions(+)` — and reported back. The commit message is its own.
+insertions(+)` — and reported back. It wrote the commit message too.
 
 ### 2 · It takes "no" for an answer
 
@@ -72,17 +73,14 @@ insertions(+)` — and reported back. The commit message is its own.
 
 ![The agent trying five ways to delete a file, and being refused every time](docs/media/approval-gate.gif)
 
-This is the clip I care most about.
+Refused once, the model did not stop at a variation of the same command. It tried **five different
+ways**: `del`, then `move`, then `ren`, then editing the project's README to mark the file obsolete,
+then rewriting that README from scratch. Each one stopped and asked. Each one was refused, and the
+file is still there.
 
-The model wanted that file gone and tried **five different ways** to do it: `del`, then `move`, then
-`ren`, then editing the project's README to mark the file obsolete, then rewriting that README from
-scratch. Every single attempt stopped and asked first. Every single one was refused.
-
-The file is still there.
-
-**That is the entire design in one clip.** A small model is a fast, tireless, cheerful junior who is
-sometimes confidently wrong. So nothing it does reaches your disk without a keypress from you — and
-that rule has no exceptions, not even a setting to turn it off for shell commands.
+That is what the gate is for. A small model is quick and cheap, and sometimes wrong in a way a build
+or a test would not catch, so nothing it does reaches the disk without a keypress. Shell commands
+have no way to opt out of that, in any mode.
 
 ---
 
@@ -145,14 +143,12 @@ you type a task
  run it, trim the output, remember what happened, loop
 ```
 
-A run gets at most 14 trips to the model, so it always ends — with an answer, or with an honest
-"I could not do this."
+A run gets at most 14 trips to the model, so it always ends: either with an answer, or with a
+message saying it could not do the task.
 
 ---
 
 ## Honest limits
-
-Please read this before the setup section, not after.
 
 - **No extension system.** No MCP servers, no skills, no subagents, no hooks, no plugins and no web
   access. The nine tools above are the whole surface, and adding a tenth means writing C#.
@@ -197,12 +193,12 @@ Please read this before the setup section, not after.
    | Flash attention | off | Measured 2.2× slower on this build |
    | Parallel prompts | 1 | One conversation at a time |
 
-   With more video memory, raise the context first. It is the binding constraint, not speed.
+   With more video memory, raise the context size first — that is what runs out, not speed.
 
 5. **Point it at a folder.** On the `Terminal UI` object, set `Workspace Folder Path`. Left empty it
    uses the folder containing this Unity project, and `/cd <path>` moves it at any time.
-   **Point it at a throwaway project the first time.** The sandbox will stop it leaving the folder;
-   nothing stops it being wrong *inside* the folder except you.
+   Use a throwaway project the first time: the sandbox keeps it inside the folder, but nothing
+   keeps it from being wrong *inside* that folder except you.
 
 6. **Open `Assets/Scenes/SampleScene.unity` and press Play.** This is what you get:
 
@@ -216,8 +212,8 @@ thread — and a run that takes minutes then looks like a hang.
 
 ## Inside the repo
 
-54 C# files, about 15,600 lines including comments. The comments carry the reasoning; several files
-record what was measured and rejected as well as what shipped.
+54 C# files, about 15,600 lines including comments. The comments explain why things are the way
+they are, including a few approaches that were tried and dropped.
 
 ```
 Assets/Scripts/
@@ -241,12 +237,12 @@ docs/implementation-plan.md   the plan of record: decisions, milestones, the ris
                               register, and every measurement taken along the way
 ```
 
-The dependency runs one way: the UI depends on the agent, never the reverse. Nothing in
-`Amberline.Agent` mentions a view, and `LlmGateway` is the only place the inference backend is named
-— which is what makes it replaceable.
+Dependencies run one way: the UI depends on the agent, never the reverse. Nothing in
+`Amberline.Agent` mentions a view, and `LlmGateway` is the only class that names the inference
+backend, so swapping it out touches one file.
 
-If you want the long version — what was tried, what was measured, and what was measured and then
-thrown away — it is all in [`docs/implementation-plan.md`](docs/implementation-plan.md).
+The long version — what was tried, what was measured, and what got dropped after measuring — is in
+[`docs/implementation-plan.md`](docs/implementation-plan.md).
 
 ---
 
