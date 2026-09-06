@@ -6,6 +6,7 @@
 </p>
 
 <p align="center">
+  <img alt="Status: demo project" src="https://img.shields.io/badge/status-demo%20project-lightgrey">
   <img alt="Unity 6000.4.11f1" src="https://img.shields.io/badge/Unity-6000.4.11f1-000000?logo=unity">
   <img alt="Platform: Windows" src="https://img.shields.io/badge/platform-Windows-0078D6">
   <img alt="Inference: 100% local" src="https://img.shields.io/badge/inference-100%25%20local-orange">
@@ -45,10 +46,10 @@ have a coding assistant.
 > know what is actually inside one of these things — and whether Unity, which everyone thinks of as a
 > tool for making games, could host a serious developer tool. It can.
 
-It is a **small** agent. Nine tools, one folder, one conversation at a time. There is no MCP, no
-skills, no subagents, no hooks and no plugin system — the parts that make a hosted assistant like
-Claude Code extensible are simply not there. What is left is the loop: plan, call a tool, read the
-result, ask before touching anything, repeat.
+It is a **small** agent, and a demonstration rather than a product. Nine tools, one folder, one
+conversation at a time. There is no MCP, no skills, no subagents, no hooks and no plugin system —
+the parts that make a hosted assistant like Claude Code extensible are simply not there. What is
+left is the loop: plan, call a tool, read the result, ask before touching anything, repeat.
 
 ---
 
@@ -150,6 +151,8 @@ message saying it could not do the task.
 
 ## Honest limits
 
+- **A demonstration, not a product.** It was built to show how a coding agent works end to end, and
+  to see whether Unity could host one. Something to read and to run, not something to depend on.
 - **No extension system.** No MCP servers, no skills, no subagents, no hooks, no plugins and no web
   access. The nine tools above are the whole surface, and adding a tenth means writing C#.
 - **Windows only.** macOS and Linux are not verified and are out of scope. The shell integration and
