@@ -236,16 +236,11 @@ Assets/Scripts/
 
 Assets/UI Toolkit/    UXML screens, USS styles, rendered to a texture
 Assets/Shaders/CRT/   the CRT shader graph, applied as a URP full-screen pass
-docs/implementation-plan.md   the plan of record: decisions, milestones, the risk
-                              register, and every measurement taken along the way
 ```
 
 Dependencies run one way: the UI depends on the agent, never the reverse. Nothing in
 `Amberline.Agent` mentions a view, and `LlmGateway` is the only class that names the inference
 backend, so swapping it out touches one file.
-
-The long version — what was tried, what was measured, and what got dropped after measuring — is in
-[`docs/implementation-plan.md`](docs/implementation-plan.md).
 
 ---
 

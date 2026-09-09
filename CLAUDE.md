@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Inference is local, via the **LLM for Unity** package (`ai.undream.llm`), which wraps llama.cpp through the LlamaLib native binaries in `Assets/StreamingAssets/LlamaLib-v2.0.2/`. Render pipeline is **URP**.
 
-Unity **6000.4.11f1**. The plan of record — architecture, milestones, measured facts and the risk register — is `docs/implementation-plan.md`. Read it before changing anything structural.
+Unity **6000.4.11f1**. Before changing anything structural, read the comments in the files you are touching: several of them record what was measured and why the current shape was chosen.
 
 ## Key Dependencies
 

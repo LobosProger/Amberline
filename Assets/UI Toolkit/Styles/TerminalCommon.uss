@@ -1,7 +1,7 @@
 /* Base terminal styles: palette tokens, font, scroll.
    The CRT effect (scanlines, vignette, chromatic aberration, bloom) is not here.
    It is a URP FullScreenPassRendererFeature on the camera that draws the
-   RawImage showing this panel's render texture. See docs/implementation-plan.md 4.2. */
+   RawImage showing this panel's render texture. */
 
 :root {
     --accent-amber: rgb(230, 170, 70);
